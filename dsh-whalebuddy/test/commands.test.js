@@ -10,6 +10,65 @@ const office = async () => createStore(await mkdtemp(join(tmpdir(), 'whalebuddy-
 
 const invoke = (rawInput) => ({ rawInput })
 
+const seedEmployee = (store, name) =>
+  store.create({ name, role: '', presetId: '', autonomy: 'L2', workspaces: [] })
+
+/**
+ * A fake `agentPresets` service that records row resolution, registrations and
+ * disposals, so tests can tell load-time from per-create work.
+ * @param {{ document?: string, disposed?: string[], failIds?: string[] }} [options]
+ */
+function fakeAgentPresets({ document = '- name: base\n', disposed = [], failIds = [] } = {}) {
+  const calls = { resolve: 0, readDocument: 0 }
+  const registrations = []
+  const service = {
+    resolve: async () => {
+      calls.resolve += 1
+      return { id: 'default' }
+    },
+    readDocument: async () => {
+      calls.readDocument += 1
+      return { content: document }
+    },
+    register: async (definition) => {
+      registrations.push(definition)
+      if (failIds.includes(definition.id)) throw new Error('registry down')
+      return async () => {
+        disposed.push(definition.id)
+      }
+    },
+  }
+  return { service, calls, registrations, disposed }
+}
+
+/**
+ * Mock `apply` context: captures every effect disposer, every registered
+ * command and every warning, with an optional `agentPresets` service.
+ * @param {object} [agentPresets]
+ * @param {string[]} [warnings]
+ */
+function createApplyHarness(agentPresets, warnings = []) {
+  const effects = []
+  const commands = []
+  const ctx = {
+    get: (name) => (name === 'agentPresets' ? agentPresets : undefined),
+    logger: {
+      info: () => undefined,
+      warn: (message) => warnings.push(message),
+    },
+    effect: (execute) => {
+      effects.push(execute())
+    },
+    commands: {
+      register: (definition) => {
+        commands.push(definition)
+        return () => undefined
+      },
+    },
+  }
+  return { ctx, effects, commands, warnings }
+}
+
 test('the colleague command advertises its name and input hint', () => {
   const command = createEmployeeCommand(createStore(join(tmpdir(), 'whalebuddy-unused')))
   assert.equal(command.name, 'colleague')
@@ -118,4 +177,107 @@ test('apply registers /colleague through an effect disposer', () => {
   assert.equal(typeof effectDisposer, 'function')
   effectDisposer()
   assert.deepEqual(disposed, ['colleague'])
+})
+
+test('apply registers a preset for each existing colleague', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-apply-preset-'))
+  await seedEmployee(createStore(root), '小白')
+  const fake = fakeAgentPresets()
+  const harness = createApplyHarness(fake.service)
+
+  await apply(harness.ctx, { dataDir: root })
+
+  assert.deepEqual(
+    fake.registrations.map((definition) => definition.id),
+    ['whalebuddy:小白'],
+  )
+  assert.equal(fake.registrations[0].plugins[0].name, 'base')
+})
+
+test('/colleague new registers the new colleague preset immediately', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-apply-create-'))
+  await seedEmployee(createStore(root), '小白')
+  const fake = fakeAgentPresets()
+  const harness = createApplyHarness(fake.service)
+  await apply(harness.ctx, { dataDir: root })
+
+  const result = await harness.commands[0].handler(invoke('new 逆戟'))
+
+  assert.deepEqual(result, { kind: 'success', text: '已创建同事「逆戟」（逆戟）。' })
+  assert.deepEqual(
+    fake.registrations.map((definition) => definition.id),
+    ['whalebuddy:小白', 'whalebuddy:逆戟'],
+  )
+  assert.equal(fake.registrations[1].plugins[0].name, 'base')
+  assert.equal(fake.calls.resolve, 1)
+  assert.equal(fake.calls.readDocument, 1)
+})
+
+test('apply on a fresh install skips template resolution and preset registration', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-apply-empty-'))
+  const fake = fakeAgentPresets()
+  const harness = createApplyHarness(fake.service)
+
+  await apply(harness.ctx, { dataDir: root })
+
+  assert.deepEqual(fake.registrations, [])
+  assert.deepEqual(fake.calls, { resolve: 0, readDocument: 0 })
+  assert.deepEqual(harness.warnings, [])
+})
+
+test('template rows resolve once and are reused by later creates', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-apply-reuse-'))
+  const fake = fakeAgentPresets()
+  const harness = createApplyHarness(fake.service)
+  await apply(harness.ctx, { dataDir: root })
+
+  await harness.commands[0].handler(invoke('new 小白'))
+  await harness.commands[0].handler(invoke('new 逆戟'))
+
+  assert.deepEqual(
+    fake.registrations.map((definition) => definition.id),
+    ['whalebuddy:小白', 'whalebuddy:逆戟'],
+  )
+  assert.equal(fake.calls.resolve, 1)
+  assert.equal(fake.calls.readDocument, 1)
+})
+
+test('a failed preset registration is logged but still creates the colleague', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-apply-fail-'))
+  const fake = fakeAgentPresets({ failIds: ['whalebuddy:逆戟'] })
+  const harness = createApplyHarness(fake.service)
+  await apply(harness.ctx, { dataDir: root })
+
+  const result = await harness.commands[0].handler(invoke('new 逆戟'))
+
+  assert.deepEqual(result, { kind: 'success', text: '已创建同事「逆戟」（逆戟）。' })
+  assert.ok(harness.warnings.some((message) => message.includes('预设注册失败')))
+})
+
+test('/colleague new still works without an agentPresets service', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-apply-nopresets-'))
+  const harness = createApplyHarness(undefined)
+  await apply(harness.ctx, { dataDir: root })
+
+  const result = await harness.commands[0].handler(invoke('new 逆戟'))
+
+  assert.deepEqual(result, { kind: 'success', text: '已创建同事「逆戟」（逆戟）。' })
+  assert.equal(harness.effects.length, 1)
+  assert.ok(harness.warnings.some((message) => message.includes('没有 agentPresets')))
+})
+
+test('unload disposes every collected preset disposer, newest first', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-apply-unload-'))
+  const store = createStore(root)
+  await seedEmployee(store, '小白')
+  await seedEmployee(store, '逆戟')
+  const fake = fakeAgentPresets()
+  const harness = createApplyHarness(fake.service)
+  await apply(harness.ctx, { dataDir: root })
+  await harness.commands[0].handler(invoke('new 阿望'))
+
+  assert.equal(harness.effects.length, 2)
+  await harness.effects[0]()
+
+  assert.deepEqual(fake.disposed, ['whalebuddy:阿望', 'whalebuddy:逆戟', 'whalebuddy:小白'])
 })

@@ -7,6 +7,7 @@ import { createStore } from './store.js'
 
 /**
  * @typedef {import('./presets.js').PresetRow} PresetRow
+ * @typedef {import('./store.js').EmployeeSummary} EmployeeSummary
  * @typedef {import('./store.js').Store} Store
  */
 
@@ -19,6 +20,12 @@ import { createStore } from './store.js'
  * @typedef {object} CommandResult
  * @property {'success' | 'error'} kind
  * @property {string} [text]
+ */
+
+/**
+ * @typedef {object} EmployeeCommandOptions
+ * @property {(employee: EmployeeSummary) => Promise<void>} [onCreated]
+ * @property {*} [logger]
  */
 
 export const name = 'dsh-whalebuddy'
@@ -68,14 +75,23 @@ function describeError(error) {
 }
 
 /**
- * Warn without requiring a complete logger; the harness always provides one.
+ * Warn through a bare logger without requiring a complete one.
+ * @param {*} logger
+ * @param {string} message
+ * @returns {void}
+ */
+function warnThrough(logger, message) {
+  if (typeof logger?.warn === 'function') logger.warn(message)
+}
+
+/**
+ * Warn through the context logger; the harness always provides one.
  * @param {*} ctx
  * @param {string} message
  * @returns {void}
  */
 function warn(ctx, message) {
-  const logger = ctx?.logger
-  if (typeof logger?.warn === 'function') logger.warn(message)
+  warnThrough(ctx?.logger, message)
 }
 
 /**
@@ -91,9 +107,10 @@ function presetRowsOf(config) {
 /**
  * Build the `/colleague` command: create a colleague or list them.
  * @param {Store} store
+ * @param {EmployeeCommandOptions} [options]
  * @returns {{ name: string, description: string, input: { hint: string }, handler: (invocation: CommandInvocation) => Promise<CommandResult> }}
  */
-export function createEmployeeCommand(store) {
+export function createEmployeeCommand(store, options = {}) {
   return {
     name: COMMAND_NAME,
     description: COMMAND_DESCRIPTION,
@@ -114,7 +131,7 @@ export function createEmployeeCommand(store) {
         const employeeName = (create[1] ?? '').trim()
         if (employeeName === '') return { kind: 'error', text: MISSING_NAME }
         try {
-          return await createEmployee(store, employeeName)
+          return await createEmployee(store, employeeName, options)
         } catch (error) {
           return { kind: 'error', text: `创建同事失败：${describeError(error)}` }
         }
@@ -142,9 +159,10 @@ async function listEmployees(store) {
 /**
  * @param {Store} store
  * @param {string} employeeName
+ * @param {EmployeeCommandOptions} [options]
  * @returns {Promise<CommandResult>}
  */
-async function createEmployee(store, employeeName) {
+async function createEmployee(store, employeeName, options = {}) {
   const known = DEFAULT_NAMES.find((entry) => entry.name === employeeName)
   const employee = await store.create({
     name: employeeName,
@@ -154,13 +172,24 @@ async function createEmployee(store, employeeName) {
     workspaces: [],
     temperament: known ? known.temperament : '',
   })
+
+  if (typeof options?.onCreated === 'function') {
+    try {
+      await options.onCreated(employee)
+    } catch (error) {
+      warnThrough(options.logger, `同事「${employee.slug}」的预设注册失败：${describeError(error)}`)
+    }
+  }
+
   return { kind: 'success', text: `已创建同事「${employeeName}」（${employee.slug}）。` }
 }
 
 /**
  * Load the plugin: register `/colleague`, then one agent preset per colleague.
- * A corrupt `index.json` only skips preset registration — it never fails the
- * plugin load. Without an `agentPresets` service the command still works.
+ * A colleague created later gets its preset registered immediately, reusing
+ * the template rows resolved at load. A corrupt `index.json` only skips preset
+ * registration — it never fails the plugin load. Without an `agentPresets`
+ * service the command still works.
  * @param {*} ctx
  * @param {{ dataDir?: string, presetRows?: PresetRow[] }} config
  * @returns {Promise<void>}
@@ -169,7 +198,53 @@ export async function apply(ctx, config) {
   const root = resolveDataDir(ctx, config)
   ctx.logger.info('whalebuddy loaded (dataDir=%s)', root)
   const store = createStore(root)
-  ctx.effect(() => ctx.commands.register(createEmployeeCommand(store)))
+
+  const agentPresets = typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined
+  const presetsAvailable = Boolean(agentPresets) && typeof agentPresets.register === 'function'
+
+  /** @type {Array<() => Promise<void>>} */
+  const disposers = []
+  /** @type {Promise<PresetRow[]> | undefined} */
+  let templateRows
+
+  /**
+   * Resolve the template rows once; load-time and per-create registration share
+   * the same promise, so the preset document is never read twice.
+   * @returns {Promise<PresetRow[]>}
+   */
+  const resolveRowsOnce = () => {
+    templateRows ??= resolveTemplateRows(agentPresets, presetRowsOf(config))
+    return templateRows
+  }
+
+  if (presetsAvailable) {
+    ctx.effect(() => async () => {
+      for (const dispose of [...disposers].reverse()) {
+        try {
+          await dispose()
+        } catch (error) {
+          warn(ctx, `注销同事预设失败：${describeError(error)}`)
+        }
+      }
+    })
+  }
+
+  /**
+   * Register the preset of a colleague created through `/colleague new`,
+   * reusing the template rows resolved for the load-time path.
+   * @param {EmployeeSummary} employee
+   * @returns {Promise<void>}
+   */
+  const registerCreated = async (employee) => {
+    const dispose = await registerEmployeePresets(agentPresets, [employee], await resolveRowsOnce(), ctx.logger)
+    disposers.push(dispose)
+  }
+
+  const command = createEmployeeCommand(store, {
+    onCreated: presetsAvailable ? registerCreated : undefined,
+    logger: ctx.logger,
+  })
+  ctx.effect(() => ctx.commands.register(command))
 
   let employees
   try {
@@ -179,15 +254,17 @@ export async function apply(ctx, config) {
     return
   }
 
-  const agentPresets = typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined
-  if (!agentPresets || typeof agentPresets.register !== 'function') {
+  if (!presetsAvailable) {
     warn(ctx, '没有 agentPresets 服务，跳过同事预设注册')
     return
   }
 
-  const rows = await resolveTemplateRows(agentPresets, presetRowsOf(config))
+  // A fresh install has nothing to register, so it also skips resolving the
+  // template document; the first created colleague resolves it exactly once.
+  if (employees.length === 0) return
+
+  const rows = await resolveRowsOnce()
   if (rows.length === 0) warn(ctx, '同事预设没有模板行，只含 Whalebuddy 自身')
 
-  const dispose = await registerEmployeePresets(agentPresets, employees, rows, ctx.logger)
-  ctx.effect(() => dispose)
+  disposers.push(await registerEmployeePresets(agentPresets, employees, rows, ctx.logger))
 }
