@@ -194,6 +194,47 @@ test('apply registers a preset for each existing colleague', async () => {
   assert.equal(fake.registrations[0].plugins[0].name, 'base')
 })
 
+test('a late agentPresets service still registers the existing colleagues', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-apply-late-'))
+  await seedEmployee(createStore(root), '小白')
+  const fake = fakeAgentPresets()
+  const effects = []
+  let injectCallback
+  const ctx = {
+    get: () => undefined,
+    logger: { info: () => undefined, warn: () => undefined },
+    effect: (execute) => {
+      effects.push(execute())
+    },
+    commands: { register: () => () => undefined },
+    inject: (deps, callback) => {
+      injectCallback = callback
+    },
+  }
+
+  await apply(ctx, { dataDir: root })
+  assert.equal(fake.registrations.length, 0)
+
+  await injectCallback({
+    get: (name) => (name === 'agentPresets' ? fake.service : undefined),
+    effect: (execute) => {
+      effects.push(execute())
+    },
+  })
+
+  for (let attempt = 0; attempt < 50 && fake.registrations.length === 0; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+
+  assert.deepEqual(
+    fake.registrations.map((definition) => definition.id),
+    ['whalebuddy:小白'],
+  )
+  assert.equal(effects.length, 2)
+  await effects.at(-1)()
+  assert.deepEqual(fake.disposed, ['whalebuddy:小白'])
+})
+
 test('/colleague new registers the new colleague preset immediately', async () => {
   const root = await mkdtemp(join(tmpdir(), 'whalebuddy-apply-create-'))
   await seedEmployee(createStore(root), '小白')

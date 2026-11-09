@@ -1,3 +1,4 @@
+import { appendFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import Schema from 'schemastery'
@@ -534,74 +535,158 @@ export async function apply(ctx, config) {
   ctx.logger.info('whalebuddy loaded (dataDir=%s)', root)
   const store = createStore(root)
 
-  const agentPresets = typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined
-  const presetsAvailable = Boolean(agentPresets) && typeof agentPresets.register === 'function'
-
   /** @type {Array<() => Promise<void>>} */
   const disposers = []
   /** @type {Promise<PresetRow[]> | undefined} */
   let templateRows
+  /** @type {*} */
+  let presets = null
+  let presetsBound = false
+  let disposeEffectBound = false
+
+  const resolveRowsOnce = () => (templateRows ??= resolveTemplateRows(presets, presetRowsOf(config)))
 
   /**
-   * Resolve the template rows once; load-time and per-create registration share
-   * the same promise, so the preset document is never read twice.
-   * @returns {Promise<PresetRow[]>}
-   */
-  const resolveRowsOnce = () => {
-    templateRows ??= resolveTemplateRows(agentPresets, presetRowsOf(config))
-    return templateRows
-  }
-
-  if (presetsAvailable) {
-    ctx.effect(() => async () => {
-      for (const dispose of [...disposers].reverse()) {
-        try {
-          await dispose()
-        } catch (error) {
-          warn(ctx, `注销同事预设失败：${describeError(error)}`)
-        }
-      }
-    })
-  }
-
-  /**
-   * Register the preset of a colleague created through `/colleague new`,
-   * reusing the template rows resolved for the load-time path.
-   * @param {EmployeeSummary} employee
+   * Append one diagnostic line for the next startup post-mortem. Never throws.
+   * @param {Record<string, string | number | undefined>} fields
    * @returns {Promise<void>}
    */
-  const registerCreated = async (employee) => {
+  const note = async (fields) => {
+    try {
+      const pairs = Object.entries(fields)
+        .filter(([, value]) => value !== undefined)
+        .map(([key, value]) => `${key}=${String(value)}`)
+      await appendFile(join(root, '_startup.log'), `${new Date().toISOString()} ${pairs.join(' ')}\n`, 'utf8')
+    } catch {
+      // diagnostics must never break the plugin
+    }
+  }
+
+  /**
+   * Dispose every collected preset registration, newest first.
+   * @returns {Promise<void>}
+   */
+  const disposeAll = async () => {
+    for (const dispose of [...disposers].reverse()) {
+      try {
+        await dispose()
+      } catch (error) {
+        warn(ctx, `注销同事预设失败：${describeError(error)}`)
+      }
+    }
+  }
+
+  /**
+   * Register the disposal effect exactly once, on the context that owns the
+   * service.
+   * @param {*} inner
+   * @returns {void}
+   */
+  const bindDisposeEffect = (inner) => {
+    if (disposeEffectBound) return
+    disposeEffectBound = true
+    inner.effect(() => disposeAll)
+  }
+
+  /**
+   * Register the preset of a colleague created through `/colleague new`.
+   * @param {EmployeeSummary} created
+   * @returns {Promise<void>}
+   */
+  const registerCreated = async (created) => {
+    if (!presets) return
     const rows = await resolveRowsOnce()
     if (rows.length === 0) warn(ctx, NO_TEMPLATE_ROWS)
-    const dispose = await registerEmployeePresets(agentPresets, [employee], rows, ctx.logger, root)
-    disposers.push(dispose)
+    try {
+      disposers.push(await registerEmployeePresets(presets, [created], rows, ctx.logger, root))
+      void note({ event: 'created', employee: created.slug, rows: rows.length })
+    } catch (error) {
+      warn(ctx, `注册「${created.slug}」的预设失败：${describeError(error)}`)
+      void note({ event: 'created-failed', employee: created.slug, error: describeError(error) })
+    }
+  }
+
+  /**
+   * Register the presets of the colleagues that already exist.
+   * @returns {Promise<void>}
+   */
+  const registerLoaded = async () => {
+    let employees
+    try {
+      employees = await store.list()
+    } catch (error) {
+      warn(ctx, `读取同事列表失败（${describeError(error)}），本次不注册同事预设`)
+      void note({ event: 'list-failed', error: describeError(error) })
+      return
+    }
+
+    if (employees.length === 0) {
+      void note({ event: 'empty', employees: 0 })
+      return
+    }
+
+    const rows = await resolveRowsOnce()
+    if (rows.length === 0) warn(ctx, NO_TEMPLATE_ROWS)
+
+    try {
+      disposers.push(await registerEmployeePresets(presets, employees, rows, ctx.logger, root))
+      void note({ event: 'loaded', employees: employees.length, rows: rows.length })
+    } catch (error) {
+      warn(ctx, `注册同事预设失败：${describeError(error)}`)
+      void note({ event: 'loaded-failed', employees: employees.length, rows: rows.length, error: describeError(error) })
+    }
+  }
+
+  /**
+   * Bind the `agentPresets` service when it appears (startup ordering) and
+   * register the existing colleagues' presets once.
+   * @param {*} inner
+   * @param {*} [service]
+   * @returns {Promise<void>}
+   */
+  const bindPresets = async (inner, service) => {
+    if (presetsBound) return
+    const resolved = service ?? (typeof inner?.get === 'function' ? inner.get('agentPresets') : undefined)
+    if (!resolved || typeof resolved.register !== 'function') {
+      warn(ctx, '没有 agentPresets 服务，跳过同事预设注册')
+      void note({ event: 'presets-missing' })
+      return
+    }
+    presetsBound = true
+    presets = resolved
+    bindDisposeEffect(inner)
+    await registerLoaded()
+  }
+
+  // Bind synchronously when the service is already visible: the disposal
+  // effect registers before the command effect, so unload disposes presets
+  // in the same order as the previous releases.
+  const visible = typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined
+  const visibleNow = Boolean(visible) && typeof visible.register === 'function'
+  if (visibleNow) {
+    presetsBound = true
+    presets = visible
+    bindDisposeEffect(ctx)
   }
 
   const command = createEmployeeCommand(store, {
-    onCreated: presetsAvailable ? registerCreated : undefined,
+    onCreated: (created) => registerCreated(created),
     logger: ctx.logger,
   })
   ctx.effect(() => ctx.commands.register(command))
 
-  let employees
-  try {
-    employees = await store.list()
-  } catch (error) {
-    warn(ctx, `读取同事列表失败（${describeError(error)}），本次不注册同事预设`)
+  if (visibleNow) {
+    await registerLoaded()
     return
   }
 
-  if (!presetsAvailable) {
-    warn(ctx, '没有 agentPresets 服务，跳过同事预设注册')
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['agentPresets'], (inner) => {
+      void bindPresets(inner)
+    })
     return
   }
 
-  // A fresh install has nothing to register, so it also skips resolving the
-  // template document; the first created colleague resolves it exactly once.
-  if (employees.length === 0) return
-
-  const rows = await resolveRowsOnce()
-  if (rows.length === 0) warn(ctx, NO_TEMPLATE_ROWS)
-
-  disposers.push(await registerEmployeePresets(agentPresets, employees, rows, ctx.logger, root))
+  warn(ctx, '没有 agentPresets 服务，跳过同事预设注册')
+  void note({ event: 'presets-missing' })
 }
