@@ -44,6 +44,15 @@ test('rule extractor pulls corrections and promises', () => {
   assert.deepEqual(x.promises, ['答应我周五前改完登录'])
 })
 
+test('the report comes from the last assistant block, not the last paragraph', () => {
+  const blocks = [
+    { role: 'assistant', text: '早先的总结。' },
+    { role: 'user', text: '最新的话。' },
+  ]
+  const x = ruleExtractor('早先的总结。\n\n最新的话。', blocks)
+  assert.equal(x.report, '早先的总结。')
+})
+
 test('the queue serializes two writes for the same employee', async () => {
   const events = []
   const q = createQueue()

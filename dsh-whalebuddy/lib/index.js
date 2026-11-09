@@ -9,6 +9,7 @@ import { createStore } from './store.js'
 
 /**
  * @typedef {import('./distill.js').Extraction} Extraction
+ * @typedef {import('./distill.js').TranscriptBlock} TranscriptBlock
  * @typedef {import('./inject.js').MemoryFiles} MemoryFiles
  * @typedef {import('./presets.js').PresetRow} PresetRow
  * @typedef {import('./store.js').EmployeeSummary} EmployeeSummary
@@ -66,7 +67,7 @@ const COLLECT_SUCCESS = '收工了。'
 const COLLECT_EMPTY = '这个会话没攒到可收的文字。'
 /** Message event types that feed the transcript buffer. */
 const MESSAGE_EVENT_TYPES = ['user/message', 'assistant/message']
-/** The transcript is cut to 8000 characters on command. */
+/** Only the newest 8000 transcript characters are distilled on command. */
 const TRANSCRIPT_LIMIT = 8000
 /** Serializes every collect's read-modify-write per employee across instances. */
 const collectQueue = createQueue()
@@ -287,22 +288,25 @@ function todayStamp(date = new Date()) {
 }
 
 /**
- * Keep the text blocks of one `user/message` or `assistant/message` event.
- * A plain string content is text too; anything else is ignored.
- * @param {string[]} buffer
+ * Keep the text blocks of one `user/message` or `assistant/message` event,
+ * tagged with the role, so the newest assistant text can become the report
+ * even after the joined transcript is tail-capped. A plain string content is
+ * text too; anything else is ignored.
+ * @param {TranscriptBlock[]} buffer
  * @param {*} event
  * @returns {void}
  */
 function recordTranscript(buffer, event) {
   if (!MESSAGE_EVENT_TYPES.includes(event?.type)) return
+  const role = event.type === 'user/message' ? 'user' : 'assistant'
   const content = event?.data?.message?.content
   if (typeof content === 'string') {
-    buffer.push(content)
+    buffer.push({ role, text: content })
     return
   }
   if (!Array.isArray(content)) return
   for (const block of content) {
-    if (block?.type === 'text' && typeof block.text === 'string') buffer.push(block.text)
+    if (block?.type === 'text' && typeof block.text === 'string') buffer.push({ role, text: block.text })
   }
 }
 
@@ -341,16 +345,18 @@ async function appendLog(store, employee, date, entry) {
  * @property {Store} store
  * @property {string} employee
  * @property {{ push(slug: string, task: () => Promise<void>): Promise<void> }} queue
- * @property {string[]} transcript
+ * @property {TranscriptBlock[]} transcript
  * @property {() => Promise<string>} refresh
  */
 
 /**
- * Build `/collect` for one preset-scoped instance. It distills the buffered
- * transcript, writes knowledge/rapport/tasks/hot plus the day's log, then calls
- * this instance's local `refresh` — never the module-scope singleton (ruling
- * R9). The buffer is cleared only after a successful write, so a failure can
- * be retried.
+ * Build `/collect` for one preset-scoped instance. It distills the newest tail
+ * of the buffered transcript, writes knowledge/rapport/tasks/hot plus the day's
+ * log, then calls this instance's local `refresh` — never the module-scope
+ * singleton (ruling R9). The full role-tagged record is passed to the extractor
+ * so the report is the newest assistant message even when the 8000-character
+ * tail cap cuts it off. The buffer is cleared only after a successful write, so
+ * a failure can be retried.
  * @param {CollectCommandOptions} options
  * @returns {{ name: string, description: string, handler: () => Promise<CommandResult> }}
  */
@@ -359,10 +365,11 @@ export function createCollectCommand({ store, employee, queue, transcript, refre
     name: COLLECT_COMMAND_NAME,
     description: COLLECT_COMMAND_DESCRIPTION,
     async handler() {
-      const text = transcript.join('\n\n').trim().slice(0, TRANSCRIPT_LIMIT)
+      const joined = transcript.map((block) => block.text).join('\n\n').trim()
+      const text = joined.slice(-TRANSCRIPT_LIMIT)
       if (text === '') return { kind: 'error', text: COLLECT_EMPTY }
 
-      const extraction = ruleExtractor(text)
+      const extraction = ruleExtractor(text, transcript)
       try {
         await queue.push(employee, async () => {
           const [hot, rapport, knowledge, tasks] = await Promise.all([
@@ -435,7 +442,10 @@ async function applyScoped(ctx, config, employee) {
     })
   }
 
-  /** Text blocks of real messages; `/collect` joins and clears it. */
+  /**
+   * Role-tagged text of real messages; `/collect` joins and clears it.
+   * @type {TranscriptBlock[]}
+   */
   const transcript = []
   if (typeof ctx.on === 'function') {
     try {

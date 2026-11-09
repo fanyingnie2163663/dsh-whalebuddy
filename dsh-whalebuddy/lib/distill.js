@@ -156,17 +156,46 @@ export function mergeExtraction(previous = {}, extraction = {}, now = '') {
 }
 
 /**
+ * One buffered message text block, tagged with its author. `index.js` keeps
+ * these while a scoped instance runs; `/collect` caps the joined text from the
+ * tail but still hands the full record over so the report is the newest
+ * assistant message even when the cap cuts the transcript.
+ *
+ * @typedef {object} TranscriptBlock
+ * @property {'user' | 'assistant'} role
+ * @property {string} text
+ */
+
+/**
+ * The report from the newest assistant block: its first 200 characters. An
+ * empty or missing record falls back to the transcript's final paragraph.
+ * @param {TranscriptBlock[] | undefined} blocks
+ * @returns {string}
+ */
+function lastAssistantReport(blocks) {
+  if (!Array.isArray(blocks)) return ''
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index]
+    const text = textOf(block?.text)
+    if (block?.role === 'assistant' && text !== '') return text.slice(0, REPORT_LIMIT)
+  }
+  return ''
+}
+
+/**
  * The P1a deterministic extractor — no model call. It splits the transcript on
  * `。！？` and newlines and classifies every sentence; the model extractor is P2.
  *
- * The transcript carries plain text only (text blocks in event order, joined
- * with a blank line by the caller), so "the last assistant text" is
- * approximated by the final paragraph — command events are not messages, so
- * the last paragraph is the assistant's most recent reply.
+ * When the caller passes the role-tagged blocks it buffered, the report is the
+ * last assistant message's first 200 characters — computed before any tail cap,
+ * so a long session's newest reply is never replaced by a stale paragraph.
+ * Without blocks the final paragraph is the best available approximation
+ * (commands are not message events, so it is normally the assistant's reply).
  * @param {string} transcript
+ * @param {TranscriptBlock[]} [blocks]
  * @returns {Extraction}
  */
-export function ruleExtractor(transcript) {
+export function ruleExtractor(transcript, blocks) {
   const text = typeof transcript === 'string' ? transcript : ''
   const sentences = text
     .split(SENTENCE_BREAK)
@@ -186,7 +215,8 @@ export function ruleExtractor(transcript) {
     .split(PARAGRAPH_BREAK)
     .map((paragraph) => paragraph.trim())
     .filter((paragraph) => paragraph !== '')
-  const report = (paragraphs.length === 0 ? '' : paragraphs[paragraphs.length - 1]).slice(0, REPORT_LIMIT)
+  const fallback = (paragraphs.length === 0 ? '' : paragraphs[paragraphs.length - 1]).slice(0, REPORT_LIMIT)
+  const report = lastAssistantReport(blocks) || fallback
 
   return { report, corrections, promises }
 }

@@ -107,6 +107,35 @@ test('/collect writes the distilled memory and refreshes only its own instance',
   assert.doesNotMatch(b.sections[0].text(), /以后别用反问句/)
 })
 
+test('/collect keeps the newest tail of a long transcript', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-collect-long-'))
+  await createStore(root).create(employee('小白'))
+  const harness = createScopedHarness()
+  await apply(harness.ctx, { dataDir: root, employee: '小白' })
+
+  // 9000 filler characters push the stale paragraph out of the last 8000.
+  const filler = '填充'.repeat(4500)
+  emitText(harness, 'assistant/message', '早先的总结。')
+  emitText(harness, 'user/message', filler)
+  emitText(harness, 'user/message', '以后别用反问句。记得周五前写完测试。')
+  emitText(harness, 'assistant/message', '最新一段总结：把登录改完。')
+
+  const result = await harness.commands[0].handler({})
+
+  assert.deepEqual(result, { kind: 'success', text: '收工了。3 条新记忆' })
+  const store = createStore(root)
+  const stamp = today()
+  const log = await store.read('小白', `memory/log/${stamp}.md`)
+  assert.match(log, /最新一段总结：把登录改完。/)
+  assert.doesNotMatch(log, /早先的总结/)
+  const hot = await store.read('小白', 'memory/hot.md')
+  assert.match(hot, /最新一段总结：把登录改完。/)
+  assert.doesNotMatch(hot, /早先的总结/)
+  assert.match(await store.read('小白', 'memory/rapport.md'), /以后别用反问句/)
+  const tasks = JSON.parse(await store.read('小白', 'memory/tasks.json'))
+  assert.deepEqual(tasks.map((task) => task.text), ['记得周五前写完测试'])
+})
+
 test('/collect with an empty transcript is an error and writes nothing', async () => {
   const root = await mkdtemp(join(tmpdir(), 'whalebuddy-collect-empty-'))
   await createStore(root).create(employee('小白'))
