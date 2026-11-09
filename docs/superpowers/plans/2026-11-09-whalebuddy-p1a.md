@@ -297,21 +297,26 @@ git commit -m "feat(whalebuddy): create command and default names"
 type PresetRow = { id?: string; name: string; config?: Record<string, unknown> }
 
 buildPresetDefinition(e: EmployeeSummary, rows: PresetRow[]): PresetDefinition
+resolveTemplateRows(agentPresets: { resolve(): Promise<{ id: string }>; readDocument(id: string): Promise<{ content: string }> }, presetRows: PresetRow[]): Promise<PresetRow[]>
 registerEmployeePresets(registry: { register(d: PresetDefinition): Promise<() => Promise<void>> }, employees: EmployeeSummary[], rows: PresetRow[]): Promise<() => Promise<void>>
 ```
 
-- [ ] **Step 1: 先做一次探针，定下 `rows` 的来源**
+- [ ] **Step 1: 定下 `rows` 的来源（不做真机探针）**
 
-在 `apply` 里临时打印 `await ctx.agentPresets.list()` 与 `await ctx.agentPresets.readDocument(默认预设 id)` 的结果，用 `/colleague probe` 触发。
-看两件事：默认预设的文档是不是一份完整的插件行列表；`PresetDefinition.plugins` 接受的行形状（`name` + `config`）。
-把结论写进 `lib/presets.js` 顶部的注释。若文档可解析（YAML），`rows` 默认取它；否则配置项 `presetRows` 必填，缺省时注册空模板并在日志里警告。
+不安装、不探测。`resolveTemplateRows(agentPresets, config)` 按顺序取：
+
+1. `config.presetRows` 非空 → 直接用（数组，元素是 `{ id?, name, config? }`）。
+2. 否则 `await agentPresets.resolve()` 拿当前默认预设的 id，`await agentPresets.readDocument(id)` 拿 YAML，用 `yaml.parse` 解析：顶层数组就是行列表；对象则取 `plugins` 或 `rows` 字段；都没有就当作失败。
+3. 全失败 → `[]`，并在 `ctx.logger.warn` 里说清楚"同事预设没有模板行，只含 Whalebuddy 自身"。
+
+把结论写进 `lib/presets.js` 顶部注释。`presetRows` 默认 `[]`。
 
 - [ ] **Step 2: Write the failing test**
 
 ```js
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildPresetDefinition, registerEmployeePresets } from '../lib/presets.js'
+import { buildPresetDefinition, registerEmployeePresets, resolveTemplateRows } from '../lib/presets.js'
 
 const emp = { slug: '小白', name: '小白', role: '日常', autonomy: 'L2', updatedAt: 0 }
 
@@ -343,6 +348,25 @@ test('one failing registration does not stop the others', async () => {
     registerEmployeePresets(registry, [emp, { ...emp, slug: '逆戟', name: '逆戟' }], []),
   )
 })
+
+test('resolveTemplateRows prefers config rows, then the default preset YAML', async () => {
+  const agentPresets = {
+    resolve: async () => ({ id: 'default' }),
+    readDocument: async () => ({ content: '- name: base\n  config: { a: 1 }\n' }),
+  }
+  assert.deepEqual(await resolveTemplateRows(agentPresets, [{ name: 'cfg' }]), [{ name: 'cfg' }])
+  const rows = await resolveTemplateRows(agentPresets, [])
+  assert.equal(rows[0].name, 'base')
+  assert.equal(rows[0].config.a, 1)
+})
+
+test('resolveTemplateRows returns [] when nothing parses', async () => {
+  const agentPresets = {
+    resolve: async () => ({ id: 'default' }),
+    readDocument: async () => ({ content: 'just a string' }),
+  }
+  assert.deepEqual(await resolveTemplateRows(agentPresets, []), [])
+})
 ```
 
 - [ ] **Step 3: Run it to verify it fails**
@@ -352,12 +376,12 @@ Expected: FAIL, module not found.
 
 - [ ] **Step 4: Implement**
 
-`buildPresetDefinition` 返回 `{ id: 'whalebuddy:' + slug, name, description: role, order: 100, plugins: [...rows, { id: 'whalebuddy-memory', name: 'dsh-whalebuddy', config: { employee: slug } }] }`。`registerEmployeePresets` 逐个 `await register(...)`，任一失败记日志并继续；返回的 disposer 逆序调用全部 disposer。`index.js` 在 `apply` 里对 `store.list()` 的结果跑一次，并把 disposer 挂到 `ctx.effect`。
+`buildPresetDefinition` 返回 `{ id: 'whalebuddy:' + slug, name, description: role, order: 100, plugins: [...rows, { id: 'whalebuddy-memory', name: 'dsh-whalebuddy', config: { employee: slug } }] }`。`registerEmployeePresets` 逐个 `await register(...)`，任一失败记日志并继续；返回的 disposer 逆序调用全部 disposer。`index.js` 在 `apply` 里 `try { const employees = await store.list() } catch (error) { ctx.logger.warn(...); return }`，成功才跑注册，并把 disposer 挂到 `ctx.effect`（corrupt index 不能把插件带崩）。
 
 - [ ] **Step 5: Run the test to verify it passes**
 
 Run: `cd dsh-whalebuddy && node --test test/presets.test.js`
-Expected: PASS, 2 tests.
+Expected: PASS, 5 tests.
 
 - [ ] **Step 6: Commit**
 
