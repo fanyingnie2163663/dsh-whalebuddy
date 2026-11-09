@@ -166,3 +166,20 @@ test('create records the preset and autonomy snapshot', async () => {
   const state = JSON.parse(await readFile(join(dir, e.slug, 'state.json'), 'utf8'))
   assert.deepEqual(state, { presetId: 'coder', autonomy: 'L3' })
 })
+
+test('default names carry a temperament', async () => {
+  const { DEFAULT_NAMES } = await import('../lib/names.js')
+  assert.deepEqual(DEFAULT_NAMES.map(n => n.name), ['小白', '逆戟', '座头', '一角', '蓝鲸'])
+  assert.ok(DEFAULT_NAMES.every(n => n.temperament.length > 0))
+})
+
+test('default names pair each whale with its designed temperament', async () => {
+  const { DEFAULT_NAMES } = await import('../lib/names.js')
+  assert.deepEqual(DEFAULT_NAMES, [
+    { name: '小白', nameEn: 'Beluga', temperament: '温和、耐心，适合日常与陪伴' },
+    { name: '逆戟', nameEn: 'Orca', temperament: '锋利、直接、话少，适合写码与挑错' },
+    { name: '座头', nameEn: 'Humpback', temperament: '爱唱爱总结，适合复盘与讲故事' },
+    { name: '一角', nameEn: 'Narwhal', temperament: '钻研、刨根问底，适合研究与查资料' },
+    { name: '蓝鲸', nameEn: 'Blue', temperament: '大、稳、扛重活' },
+  ])
+})
