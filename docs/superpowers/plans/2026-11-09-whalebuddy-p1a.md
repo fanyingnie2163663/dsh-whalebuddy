@@ -461,7 +461,7 @@ Expected: FAIL, module not found.
 - `config.employee` 非空 → 解析数据根、建 store、读 `profile/rapport/knowledge/hot/tasks/_shared`（缺失的归并为 `''`），`ctx.systemPrompt.section({ name: 'whalebuddy:memory', order: ctx.systemPrompt.getSectionOrder('HARNESS_IDENTITY') + 1, text: () => cached })`，`text` 必须是同步的。
 - `config.employee` 为空（profile 级加载）→ 不注册 section，只注册 `/colleague` 与员工预设。
 - `config.employee` 非空（预设作用域实例）→ **跳过** `/colleague` 与预设注册，只注册 section；否则每个会话都会再注册一遍命令和预设。
-- 缓存：apply 时读一次；`session/event` 的 `turn/start` 与 `/收工` 之后各刷新一次（异步读、同步取）；读失败返回空字符串并记日志，绝不抛。
+- 缓存：apply 时读一次；`session/event` 的 `turn/start` 与 `/collect` 之后各刷新一次（异步读、同步取）；读失败返回空字符串并记日志，绝不抛。
 - 刷新挂在 `session/event` 的 `turn/start` 上，不是 host 事件：同一个监听器先累积 text，再在 `event.type === 'turn/start'` 时调用 refresh。
 - `getSectionOrder` 用 `try/catch` 包一层，未知名字退回 `1000`。
 
@@ -566,7 +566,7 @@ Expected: FAIL, module not found.
 
 - [ ] **Step 4: 接到命令与写回**
 
-`/收工` 只在**预设作用域实例**里注册（`config.employee` 已知）；profile 级实例不注册。
+`/collect` 只在**预设作用域实例**里注册（`config.employee` 已知）；profile 级实例不注册。
 
 - 文本来源：作用域内 `ctx.on('session/event', (session, event) => ...)`（先判 `typeof ctx.on === 'function'`），把 `user/message` 与 `assistant/message` 的 text 块累积进缓冲区；命令触发时 join、截到 8000 字，收工后清空。
 - 执行：`ruleExtractor(transcript)` → `queue.push(slug, async () => { 读 hot/rapport/knowledge/tasks → mergeExtraction → 写回 knowledge/rapport/tasks/hot 与 memory/log/<today>.md → 调本作用域的 refreshMemory() })`。
