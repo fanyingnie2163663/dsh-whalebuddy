@@ -44,6 +44,24 @@ test('rule extractor pulls corrections and promises', () => {
   assert.deepEqual(x.promises, ['答应我周五前改完登录'])
 })
 
+test('the assistant echo is never a correction', () => {
+  const blocks = [
+    { role: 'user', text: '以后别用反问句' },
+    { role: 'assistant', text: '好的，记住了：以后不用反问句。' },
+  ]
+  const x = ruleExtractor('以后别用反问句\n\n好的，记住了：以后不用反问句。', blocks)
+  assert.deepEqual(x.corrections, ['以后别用反问句'])
+})
+
+test('a user promise survives an assistant reply that repeats a marker', () => {
+  const blocks = [
+    { role: 'user', text: '答应我周五前改完登录' },
+    { role: 'assistant', text: '好的，我记得了：以后不用反问句。' },
+  ]
+  const x = ruleExtractor('答应我周五前改完登录\n\n好的，我记得了：以后不用反问句。', blocks)
+  assert.deepEqual(x.promises, ['答应我周五前改完登录'])
+})
+
 test('the report comes from the last assistant block, not the last paragraph', () => {
   const blocks = [
     { role: 'assistant', text: '早先的总结。' },

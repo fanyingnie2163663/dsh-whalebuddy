@@ -73,20 +73,22 @@ function emitText(harness, type, text) {
   listener.handler({}, { type, data })
 }
 
-test('a user correction is captured from the real user/message payload', async () => {
+test('a user correction is captured from the real user/message payload, not the assistant echo', async () => {
   const root = await mkdtemp(join(tmpdir(), 'whalebuddy-collect-user-'))
   await createStore(root).create(employee('小白'))
   const harness = createScopedHarness()
   await apply(harness.ctx, { dataDir: root, employee: '小白' })
 
-  emitText(harness, 'user/message', '以后别用反问句。')
-  emitText(harness, 'assistant/message', '好，直接说结论。')
+  emitText(harness, 'user/message', '以后别用反问句')
+  emitText(harness, 'assistant/message', '好的，记住了：以后不用反问句。')
 
   const result = await harness.commands[0].handler({})
 
   assert.deepEqual(result, { kind: 'success', text: '收工了。2 条新记忆' })
   const store = createStore(root)
-  assert.match(await store.read('小白', 'memory/rapport.md'), /纠错：以后别用反问句/)
+  const rapport = await store.read('小白', 'memory/rapport.md')
+  assert.match(rapport, /纠错：以后别用反问句/)
+  assert.doesNotMatch(rapport, /好的，记住了/)
   assert.deepEqual(JSON.parse(await store.read('小白', 'memory/tasks.json')), [])
 })
 

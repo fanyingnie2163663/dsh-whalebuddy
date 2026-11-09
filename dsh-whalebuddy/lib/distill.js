@@ -167,6 +167,24 @@ export function mergeExtraction(previous = {}, extraction = {}, now = '') {
  */
 
 /**
+ * The text the sentence classifier may see. With a role-tagged record only the
+ * user's own words count: a live session once wrote the assistant's echo
+ * (`好的，记住了：以后不用反问句`) into `rapport.md` as the user's correction.
+ * A string-only caller has no roles, so it keeps the legacy transcript scan.
+ * @param {string} transcript
+ * @param {TranscriptBlock[] | undefined} blocks
+ * @returns {string}
+ */
+function classifiableText(transcript, blocks) {
+  if (!Array.isArray(blocks)) return transcript
+  return blocks
+    .filter((block) => block?.role === 'user')
+    .map((block) => textOf(block?.text))
+    .filter((text) => text !== '')
+    .join('\n\n')
+}
+
+/**
  * The report from the newest assistant block: its first 200 characters. An
  * empty or missing record falls back to the transcript's final paragraph.
  * @param {TranscriptBlock[] | undefined} blocks
@@ -186,18 +204,22 @@ function lastAssistantReport(blocks) {
  * The P1a deterministic extractor — no model call. It splits the transcript on
  * `。！？` and newlines and classifies every sentence; the model extractor is P2.
  *
- * When the caller passes the role-tagged blocks it buffered, the report is the
- * last assistant message's first 200 characters — computed before any tail cap,
- * so a long session's newest reply is never replaced by a stale paragraph.
- * Without blocks the final paragraph is the best available approximation
- * (commands are not message events, so it is normally the assistant's reply).
+ * With the role-tagged blocks, corrections and promises come from the user
+ * blocks only — the assistant's echo is never the user's correction. A
+ * string-only caller has no roles and keeps the whole-transcript fallback.
+ *
+ * The report is the last assistant message's first 200 characters — computed
+ * before any tail cap, so a long session's newest reply is never replaced by a
+ * stale paragraph. Without blocks the final paragraph is the best available
+ * approximation (commands are not message events, so it is normally the
+ * assistant's reply).
  * @param {string} transcript
  * @param {TranscriptBlock[]} [blocks]
  * @returns {Extraction}
  */
 export function ruleExtractor(transcript, blocks) {
   const text = typeof transcript === 'string' ? transcript : ''
-  const sentences = text
+  const sentences = classifiableText(text, blocks)
     .split(SENTENCE_BREAK)
     .map((sentence) => sentence.trim())
     .filter((sentence) => sentence !== '')

@@ -358,19 +358,24 @@ async function appendLog(store, employee, date, entry) {
  * of the buffered transcript, writes knowledge/rapport/tasks/hot plus the day's
  * log, then calls this instance's local `refresh` — never the module-scope
  * singleton (ruling R9). The full role-tagged record is passed to the extractor
- * so the report is the newest assistant message even when the 8000-character
- * tail cap cuts it off. The buffer is cleared only after a successful write, so
- * a failure can be retried.
+ * so the report is the newest assistant message and only the user's turns can
+ * yield corrections/promises, even when the 8000-character tail cap cuts the
+ * transcript. A plain string has no roles, so it reaches the extractor without
+ * the record and keeps the legacy whole-text fallback. The buffer is cleared
+ * only after a successful write, so a failure can be retried.
  * @param {CollectCommandOptions} options
  * @returns {{ name: string, description: string, handler: () => Promise<CommandResult> }}
  */
 export function createCollectCommand({ store, employee, queue, transcript, refresh }) {
   // Compatibility: a caller may still pass one plain string. It counts as a
-  // single assistant block; the documented input type stays TranscriptBlock[].
+  // single assistant block for the join/clear bookkeeping; the documented input
+  // type stays TranscriptBlock[]. The extractor is handed no record in that case
+  // because a string carries no roles (see above).
   /** @type {TranscriptBlock[] | string} */
   const input = transcript
+  const isStringInput = typeof input === 'string'
   /** @type {TranscriptBlock[]} */
-  const blocks = typeof input === 'string' ? [{ role: 'assistant', text: input }] : input
+  const blocks = isStringInput ? [{ role: 'assistant', text: input }] : input
 
   return {
     name: COLLECT_COMMAND_NAME,
@@ -380,7 +385,7 @@ export function createCollectCommand({ store, employee, queue, transcript, refre
       const text = joined.slice(-TRANSCRIPT_LIMIT)
       if (text === '') return { kind: 'error', text: COLLECT_EMPTY }
 
-      const extraction = ruleExtractor(text, blocks)
+      const extraction = ruleExtractor(text, isStringInput ? undefined : blocks)
       try {
         await queue.push(employee, async () => {
           const [hot, rapport, knowledge, tasks] = await Promise.all([
