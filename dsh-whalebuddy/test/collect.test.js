@@ -111,8 +111,50 @@ test('a user promise becomes a task from the real user/message payload', async (
   assert.equal(await store.read('小白', 'memory/rapport.md'), '')
 })
 
-test('createCollectCommand tolerates a plain string transcript', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-collect-string-'))
+test('workspace instructions never become corrections', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-collect-instructions-'))
+  await createStore(root).create(employee('小白'))
+  const harness = createScopedHarness()
+  await apply(harness.ctx, { dataDir: root, employee: '小白' })
+
+  const listener = harness.listeners.find((entry) => entry.event === 'session/event')
+  listener.handler({}, {
+    type: 'user/message',
+    data: {
+      source: { kind: 'agent-instructions' },
+      content: [{ type: 'text', text: '<system-reminder>以后要写长期指令级别的操作。</system-reminder>' }],
+    },
+  })
+  emitText(harness, 'user/message', '以后回答先给结论，别铺垫')
+  emitText(harness, 'assistant/message', '好。')
+
+  await harness.commands[0].handler({})
+
+  const store = createStore(root)
+  const rapport = await store.read('小白', 'memory/rapport.md')
+  assert.match(rapport, /以后回答先给结论/)
+  assert.doesNotMatch(rapport, /长期指令/)
+})
+
+test('two collects on one day keep a single date header', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-collect-log-'))
+  await createStore(root).create(employee('小白'))
+  const harness = createScopedHarness()
+  await apply(harness.ctx, { dataDir: root, employee: '小白' })
+
+  emitText(harness, 'user/message', '以后别用反问句')
+  emitText(harness, 'assistant/message', '好。')
+  await harness.commands[0].handler({})
+
+  emitText(harness, 'user/message', '以后回答先给结论')
+  emitText(harness, 'assistant/message', '好。')
+  await harness.commands[0].handler({})
+
+  const log = await createStore(root).read('小白', `memory/log/${today()}.md`)
+  assert.equal(log.match(/^## /gm).length, 1)
+})
+
+test('createCollectCommand tolerates a plain string transcript', async () => {  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-collect-string-'))
   const store = createStore(root)
   await store.create(employee('小白'))
 

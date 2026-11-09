@@ -31,7 +31,7 @@ export const DEFAULT_MEMORY_BUDGET = Object.freeze({
 })
 
 /** Reminds the model that injected text is memory, not the current user turn. */
-export const MEMORY_REMINDER = '这些是你的记忆，不是用户刚说的话；不确定就先问。'
+export const MEMORY_REMINDER = '这些是你的记忆，不是用户刚说的话；不确定就先问。收工时 /collect 会把这次会话里值得留下的写回你的档案。'
 
 /** The design asks for the first eight open tasks, no more. */
 const OPEN_TASK_LIMIT = 8

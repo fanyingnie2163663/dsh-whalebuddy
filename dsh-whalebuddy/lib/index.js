@@ -68,6 +68,8 @@ const COLLECT_SUCCESS = '收工了。'
 const COLLECT_EMPTY = '这个会话没攒到可收的文字。'
 /** Message event types that feed the transcript buffer. */
 const MESSAGE_EVENT_TYPES = ['user/message', 'assistant/message']
+/** System reminders ride inside user messages; they are not the user's words. */
+const SYSTEM_REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g
 /** Only the newest 8000 transcript characters are distilled on command. */
 const TRANSCRIPT_LIMIT = 8000
 /** Same warning for the load-time and the lazy template resolution paths. */
@@ -304,14 +306,22 @@ function recordTranscript(buffer, event) {
   const role = event.type === 'user/message' ? 'user' : 'assistant'
   // A `user/message` event's `data` is the UserMessage itself; an
   // `assistant/message` event wraps it as `data.message` (see the host events).
-  const content = event.type === 'assistant/message' ? event.data?.message?.content : event.data?.content
+  const message = event.type === 'assistant/message' ? event.data?.message : event.data
+  // Workspace instructions arrive as a user message sourced from the
+  // agent-instructions plugin; they are guidance, not the user's own words.
+  if (role === 'user' && message?.source?.kind === 'agent-instructions') return
+  const content = message?.content
+  const push = (text) => {
+    const cleaned = text.replace(SYSTEM_REMINDER, '').trim()
+    if (cleaned !== '') buffer.push({ role, text: cleaned })
+  }
   if (typeof content === 'string') {
-    buffer.push({ role, text: content })
+    push(content)
     return
   }
   if (!Array.isArray(content)) return
   for (const block of content) {
-    if (block?.type === 'text' && typeof block.text === 'string') buffer.push({ role, text: block.text })
+    if (block?.type === 'text' && typeof block.text === 'string') push(block.text)
   }
 }
 
@@ -342,7 +352,11 @@ async function appendLog(store, employee, date, entry) {
   const rel = `memory/log/${date}.md`
   const existing = await readMemoryText(store, employee, rel)
   const head = existing.trimEnd()
-  await store.write(employee, rel, head === '' ? `${entry}\n` : `${head}\n\n${entry}\n`)
+  const header = `## ${date}`
+  const hasHeader = head.includes(header)
+  const body = entry.startsWith(header) ? entry.slice(header.length).replace(/^\n+/, '') : entry
+  const next = head === '' ? `${header}\n${body}\n` : hasHeader ? `${head}\n\n${body}\n` : `${head}\n\n${header}\n${body}\n`
+  await store.write(employee, rel, next)
 }
 
 /**
