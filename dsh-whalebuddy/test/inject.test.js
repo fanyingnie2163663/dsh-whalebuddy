@@ -76,7 +76,7 @@ function createWiringContext({ agentPresets, sectionOrder = 10 } = {}) {
   return { ctx, sections, commands, events, warnings, effects }
 }
 
-test('a scoped apply registers the memory section and no command', async () => {
+test('a scoped apply registers the memory section and only /collect', async () => {
   const root = await mkdtemp(join(tmpdir(), 'whalebuddy-inject-scoped-'))
   const store = createStore(root)
   await store.create({ name: '小白', role: '', presetId: '', autonomy: 'L2', workspaces: [] })
@@ -95,7 +95,10 @@ test('a scoped apply registers the memory section and no command', async () => {
 
   await apply(harness.ctx, { dataDir: root, employee: '小白' })
 
-  assert.deepEqual(harness.commands, [])
+  assert.deepEqual(
+    harness.commands.map((command) => command.name),
+    ['collect'],
+  )
   assert.deepEqual(registrations, [])
   assert.equal(harness.sections.length, 1)
   const [section] = harness.sections
@@ -119,6 +122,42 @@ test('a scoped apply registers the memory section and no command', async () => {
   await assert.doesNotReject(refreshMemory())
   assert.match(section.text(), /刚收完工的新近况/)
   assert.ok(harness.warnings.some((message) => message.includes('记忆失败')))
+})
+
+test('a custom dataDir reaches the preset-scoped instance', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-datadir-'))
+  const store = createStore(root)
+  await store.create({ name: '小白', role: '', presetId: '', autonomy: 'L2', workspaces: [] })
+  await store.write('小白', 'memory/rapport.md', '- 别用反问句。\n')
+
+  const registrations = []
+  const profile = createWiringContext({
+    agentPresets: {
+      register: async (definition) => {
+        registrations.push(definition)
+        return async () => {}
+      },
+    },
+  })
+  await apply(profile.ctx, { dataDir: root })
+
+  const own = registrations[0].plugins.find((row) => row.name === 'dsh-whalebuddy')
+  assert.equal(own.config.dataDir, root)
+
+  // Load the scoped copy exactly as the preset would, while the harness home
+  // points at a decoy root with different memory: only the row's dataDir can
+  // reach the real one.
+  const wrongRoot = await mkdtemp(join(tmpdir(), 'whalebuddy-datadir-wrong-'))
+  await createStore(wrongRoot).create({ name: '小白', role: '', presetId: '', autonomy: 'L2', workspaces: [] })
+  await createStore(wrongRoot).write('小白', 'memory/rapport.md', '- 错的记忆。\n')
+  const scoped = createWiringContext()
+  scoped.ctx.get = (name) => (name === 'dshHomePath' ? () => wrongRoot : undefined)
+
+  await apply(scoped.ctx, own.config)
+
+  assert.ok(scoped.sections.length > 0)
+  assert.match(scoped.sections[0].text(), /别用反问句/)
+  assert.doesNotMatch(scoped.sections[0].text(), /错的记忆/)
 })
 
 test('a profile-level apply registers no memory section', async () => {

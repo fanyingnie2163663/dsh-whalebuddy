@@ -13,6 +13,12 @@ test('preset carries the employee slug in its own row', () => {
   assert.equal(def.plugins[0].name, 'some-base-plugin')
 })
 
+test('a custom data root rides along in the preset row', () => {
+  const def = buildPresetDefinition(emp, [], 'D:/colleagues')
+  const own = def.plugins.find(r => r.name === 'dsh-whalebuddy')
+  assert.deepEqual(own.config, { employee: '小白', dataDir: 'D:/colleagues' })
+})
+
 test('register returns a disposer that unregisters every employee', async () => {
   const registered = []
   const registry = { register: async (d) => { registered.push(d.id); return async () => {} } }

@@ -77,16 +77,19 @@ function warn(logger, message) {
 
 /**
  * Build one colleague's preset: the template rows, then Whalebuddy's own row
- * carrying the employee slug.
+ * carrying the employee slug. A non-empty `dataDir` (ruling R10) rides along
+ * so the preset-scoped copy resolves the same root as the profile-level load.
  * @param {EmployeeSummary} employee
  * @param {PresetRow[]} rows
+ * @param {string} [dataDir]
  * @returns {PresetDefinition}
  */
-export function buildPresetDefinition(employee, rows) {
+export function buildPresetDefinition(employee, rows, dataDir) {
   const slug = employee.slug
   const name = typeof employee.name === 'string' && employee.name !== '' ? employee.name : slug
   const description = typeof employee.role === 'string' ? employee.role : ''
   const templateRows = Array.isArray(rows) ? rows : []
+  const root = typeof dataDir === 'string' && dataDir !== '' ? dataDir : undefined
 
   return {
     id: `${PRESET_ID_PREFIX}${slug}`,
@@ -95,7 +98,11 @@ export function buildPresetDefinition(employee, rows) {
     order: PRESET_ORDER,
     plugins: [
       ...templateRows,
-      { id: MEMORY_PLUGIN_ID, name: OWN_PLUGIN_NAME, config: { employee: slug } },
+      {
+        id: MEMORY_PLUGIN_ID,
+        name: OWN_PLUGIN_NAME,
+        config: root === undefined ? { employee: slug } : { employee: slug, dataDir: root },
+      },
     ],
   }
 }
@@ -141,20 +148,22 @@ export async function resolveTemplateRows(agentPresets, presetRows = []) {
 /**
  * Register one preset per employee. A failed registration is logged and the
  * remaining employees are still registered; the returned disposer unregisters
- * in reverse order, each disposer awaited and individually caught.
+ * in reverse order, each disposer awaited and individually caught. A non-empty
+ * `dataDir` is threaded into every built preset row (ruling R10).
  * @param {PresetRegistry} registry
  * @param {EmployeeSummary[]} employees
  * @param {PresetRow[]} rows
  * @param {PresetLogger} [logger]
+ * @param {string} [dataDir]
  * @returns {Promise<() => Promise<void>>}
  */
-export async function registerEmployeePresets(registry, employees, rows, logger) {
+export async function registerEmployeePresets(registry, employees, rows, logger, dataDir) {
   /** @type {Array<() => Promise<void>>} */
   const disposers = []
 
   for (const employee of employees) {
     try {
-      const dispose = await registry.register(buildPresetDefinition(employee, rows))
+      const dispose = await registry.register(buildPresetDefinition(employee, rows, dataDir))
       if (typeof dispose === 'function') disposers.push(dispose)
     } catch (error) {
       warn(logger, `同事「${employee?.slug}」的预设注册失败：${describeError(error)}`)

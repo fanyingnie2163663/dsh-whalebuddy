@@ -1,12 +1,14 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import Schema from 'schemastery'
+import { createQueue, mergeExtraction, ruleExtractor } from './distill.js'
 import { assembleMemory } from './inject.js'
 import { DEFAULT_NAMES } from './names.js'
 import { registerEmployeePresets, resolveTemplateRows } from './presets.js'
 import { createStore } from './store.js'
 
 /**
+ * @typedef {import('./distill.js').Extraction} Extraction
  * @typedef {import('./inject.js').MemoryFiles} MemoryFiles
  * @typedef {import('./presets.js').PresetRow} PresetRow
  * @typedef {import('./store.js').EmployeeSummary} EmployeeSummary
@@ -57,6 +59,17 @@ const HARNESS_IDENTITY_SECTION = 'HARNESS_IDENTITY'
 /** `_shared/` sits beside the employee directories, not inside one. */
 const SHARED_SLUG = '_shared'
 const SHARED_USER_FILE = 'user.md'
+/** `/collect` exists only in a preset-scoped instance (ruling R9). */
+const COLLECT_COMMAND_NAME = 'collect'
+const COLLECT_COMMAND_DESCRIPTION = '收工：把这次会话里值得留下的写进记忆'
+const COLLECT_SUCCESS = '收工了。'
+const COLLECT_EMPTY = '这个会话没攒到可收的文字。'
+/** Message event types that feed the transcript buffer. */
+const MESSAGE_EVENT_TYPES = ['user/message', 'assistant/message']
+/** The transcript is cut to 8000 characters on command. */
+const TRANSCRIPT_LIMIT = 8000
+/** Serializes every collect's read-modify-write per employee across instances. */
+const collectQueue = createQueue()
 
 /**
  * Resolve the colleague data root: the configured directory when it is
@@ -263,11 +276,130 @@ async function readMemoryFiles(store, employee) {
 }
 
 /**
- * Preset-scoped load: cache the colleague's memory and expose it as one prompt
- * section. The command and the preset registry belong to the profile-level
- * load, so this mode deliberately skips both; otherwise every session of the
- * colleague would register them again. The section provider is synchronous,
- * reads the cache, and never throws.
+ * Local `YYYY-MM-DD` stamp: the log file name and every dated memory line.
+ * @param {Date} [date]
+ * @returns {string}
+ */
+function todayStamp(date = new Date()) {
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${date.getFullYear()}-${month}-${day}`
+}
+
+/**
+ * Keep the text blocks of one `user/message` or `assistant/message` event.
+ * A plain string content is text too; anything else is ignored.
+ * @param {string[]} buffer
+ * @param {*} event
+ * @returns {void}
+ */
+function recordTranscript(buffer, event) {
+  if (!MESSAGE_EVENT_TYPES.includes(event?.type)) return
+  const content = event?.data?.message?.content
+  if (typeof content === 'string') {
+    buffer.push(content)
+    return
+  }
+  if (!Array.isArray(content)) return
+  for (const block of content) {
+    if (block?.type === 'text' && typeof block.text === 'string') buffer.push(block.text)
+  }
+}
+
+/**
+ * How many memory items one extraction contributes: corrections, promises,
+ * facts and the report (the log line).
+ * @param {Extraction} extraction
+ * @returns {number}
+ */
+function countNewMemories(extraction) {
+  let count = typeof extraction.report === 'string' && extraction.report.trim() !== '' ? 1 : 0
+  for (const list of [extraction.corrections, extraction.promises, extraction.facts]) {
+    if (Array.isArray(list)) count += list.length
+  }
+  return count
+}
+
+/**
+ * Append one log entry to `memory/log/<date>.md`, keeping a blank line
+ * between entries.
+ * @param {Store} store
+ * @param {string} employee
+ * @param {string} date
+ * @param {string} entry
+ * @returns {Promise<void>}
+ */
+async function appendLog(store, employee, date, entry) {
+  const rel = `memory/log/${date}.md`
+  const existing = await readMemoryText(store, employee, rel)
+  const head = existing.trimEnd()
+  await store.write(employee, rel, head === '' ? `${entry}\n` : `${head}\n\n${entry}\n`)
+}
+
+/**
+ * @typedef {object} CollectCommandOptions
+ * @property {Store} store
+ * @property {string} employee
+ * @property {{ push(slug: string, task: () => Promise<void>): Promise<void> }} queue
+ * @property {string[]} transcript
+ * @property {() => Promise<string>} refresh
+ */
+
+/**
+ * Build `/collect` for one preset-scoped instance. It distills the buffered
+ * transcript, writes knowledge/rapport/tasks/hot plus the day's log, then calls
+ * this instance's local `refresh` — never the module-scope singleton (ruling
+ * R9). The buffer is cleared only after a successful write, so a failure can
+ * be retried.
+ * @param {CollectCommandOptions} options
+ * @returns {{ name: string, description: string, handler: () => Promise<CommandResult> }}
+ */
+export function createCollectCommand({ store, employee, queue, transcript, refresh }) {
+  return {
+    name: COLLECT_COMMAND_NAME,
+    description: COLLECT_COMMAND_DESCRIPTION,
+    async handler() {
+      const text = transcript.join('\n\n').trim().slice(0, TRANSCRIPT_LIMIT)
+      if (text === '') return { kind: 'error', text: COLLECT_EMPTY }
+
+      const extraction = ruleExtractor(text)
+      try {
+        await queue.push(employee, async () => {
+          const [hot, rapport, knowledge, tasks] = await Promise.all([
+            readMemoryText(store, employee, 'memory/hot.md'),
+            readMemoryText(store, employee, 'memory/rapport.md'),
+            readMemoryText(store, employee, 'memory/knowledge.md'),
+            store.tasks(employee),
+          ])
+          const stamp = todayStamp()
+          const merged = mergeExtraction({ hot, rapport, knowledge, tasks }, extraction, stamp)
+
+          await store.write(employee, 'memory/knowledge.md', merged.knowledge)
+          await store.write(employee, 'memory/rapport.md', merged.rapport)
+          await store.saveTasks(employee, merged.tasks)
+          await store.write(employee, 'memory/hot.md', merged.hot)
+          if (merged.logEntry !== '') await appendLog(store, employee, stamp, merged.logEntry)
+          await refresh()
+        })
+      } catch (error) {
+        return { kind: 'error', text: `收工失败：${describeError(error)}` }
+      }
+
+      transcript.length = 0
+      const added = countNewMemories(extraction)
+      return added > 0
+        ? { kind: 'success', text: `${COLLECT_SUCCESS}${added} 条新记忆` }
+        : { kind: 'success', text: COLLECT_SUCCESS }
+    },
+  }
+}
+
+/**
+ * Preset-scoped load: cache the colleague's memory, expose it as one prompt
+ * section, buffer the session transcript and register `/collect`. The
+ * profile-level `/colleague` command and the preset registry are deliberately
+ * skipped; otherwise every session of the colleague would register them again.
+ * The section provider is synchronous, reads the cache, and never throws.
  * @param {*} ctx
  * @param {{ dataDir?: string, employee?: string }} config
  * @param {string} employee
@@ -277,11 +409,6 @@ async function applyScoped(ctx, config, employee) {
   const root = resolveDataDir(ctx, config)
   const store = createStore(root)
   const systemPrompt = ctx?.systemPrompt
-
-  if (typeof systemPrompt?.section !== 'function') {
-    warn(ctx, '没有 systemPrompt 服务，跳过记忆注入')
-    return
-  }
 
   let cached = ''
 
@@ -307,7 +434,15 @@ async function applyScoped(ctx, config, employee) {
       if (memoryRefresher === refresh) memoryRefresher = null
     })
   }
+
+  /** Text blocks of real messages; `/collect` joins and clears it. */
+  const transcript = []
   if (typeof ctx.on === 'function') {
+    try {
+      ctx.on('session/event', (session, event) => recordTranscript(transcript, event))
+    } catch (error) {
+      warn(ctx, `监听 session/event 失败：${describeError(error)}`)
+    }
     try {
       ctx.on('turn/start', () => {
         void refresh()
@@ -317,8 +452,20 @@ async function applyScoped(ctx, config, employee) {
     }
   }
 
+  const command = createCollectCommand({ store, employee, queue: collectQueue, transcript, refresh })
+  if (typeof ctx.effect === 'function' && typeof ctx.commands?.register === 'function') {
+    ctx.effect(() => ctx.commands.register(command))
+  } else {
+    warn(ctx, '没有 commands 服务，跳过 /collect 注册')
+  }
+
   // Load once at apply so the first assembly already sees the memory.
   await refresh()
+
+  if (typeof systemPrompt?.section !== 'function') {
+    warn(ctx, '没有 systemPrompt 服务，跳过记忆注入')
+    return
+  }
 
   try {
     systemPrompt.section({
@@ -338,8 +485,9 @@ async function applyScoped(ctx, config, employee) {
 /**
  * Load the plugin in one of two modes, chosen by `config.employee`:
  *
- * - non-empty (a colleague preset's scoped copy): inject that colleague's
- *   memory as a prompt section and nothing else;
+ * - non-empty (a colleague preset's scoped copy): buffer the session and
+ *   register `/collect`, then inject that colleague's memory as a prompt
+ *   section — never `/colleague` or the preset registry;
  * - empty (the profile-level load): register `/colleague`, then one agent
  *   preset per colleague. A colleague created later gets its preset registered
  *   immediately, reusing the template rows resolved at load. A corrupt
@@ -397,7 +545,13 @@ export async function apply(ctx, config) {
    * @returns {Promise<void>}
    */
   const registerCreated = async (employee) => {
-    const dispose = await registerEmployeePresets(agentPresets, [employee], await resolveRowsOnce(), ctx.logger)
+    const dispose = await registerEmployeePresets(
+      agentPresets,
+      [employee],
+      await resolveRowsOnce(),
+      ctx.logger,
+      root,
+    )
     disposers.push(dispose)
   }
 
@@ -427,5 +581,5 @@ export async function apply(ctx, config) {
   const rows = await resolveRowsOnce()
   if (rows.length === 0) warn(ctx, '同事预设没有模板行，只含 Whalebuddy 自身')
 
-  disposers.push(await registerEmployeePresets(agentPresets, employees, rows, ctx.logger))
+  disposers.push(await registerEmployeePresets(agentPresets, employees, rows, ctx.logger, root))
 }
