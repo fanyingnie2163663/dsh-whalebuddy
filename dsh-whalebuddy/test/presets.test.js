@@ -50,6 +50,29 @@ test('resolveTemplateRows prefers config rows, then the default preset YAML', as
   assert.equal(rows[0].config.a, 1)
 })
 
+test('resolveTemplateRows keeps !!js expressions for the Loader', async () => {
+  const source = {
+    resolve: async () => ({ id: 'default' }),
+    readDocument: async () => ({
+      content: [
+        '- name: tool-pwsh',
+        "  disabled: !!js process.platform !== 'win32'",
+        '- name: tool-bash',
+        '  disabled: false',
+        '- name: tool-web',
+        '  config: { enabled: true }',
+      ].join('\n'),
+    }),
+  }
+
+  const rows = await resolveTemplateRows(source, [])
+
+  assert.equal(rows[0].name, 'tool-pwsh')
+  assert.deepEqual(rows[0].disabled, { __jsExpr: "process.platform !== 'win32'" })
+  assert.equal(rows[1].disabled, false)
+  assert.equal(rows[2].config.enabled, true)
+})
+
 test('resolveTemplateRows returns [] when nothing parses', async () => {
   const agentPresets = {
     resolve: async () => ({ id: 'default' }),

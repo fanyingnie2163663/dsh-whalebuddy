@@ -10,6 +10,20 @@ import { createStore } from '../lib/store.js'
 const B = { identity: 50, rapport: 100, tasks: 50, recent: 50, shared: 50 }
 const empty = { profile: '', rapport: '', knowledge: '', hot: '', tasks: [], shared: '' }
 
+/**
+ * Poll until an awaited async refresh has landed in the cache.
+ * @param {() => boolean} check
+ * @param {string} what
+ * @returns {Promise<void>}
+ */
+async function until(check, what) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (check()) return
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  assert.fail(`timed out waiting for ${what}`)
+}
+
 test('empty memory yields only the identity section', () => {
   const out = assembleMemory({ ...empty, profile: '# 小白' }, B)
   assert.match(out, /小白/)
@@ -111,7 +125,14 @@ test('a scoped apply registers the memory section and only /collect', async () =
   assert.match(text, /别用反问句/)
   assert.match(text, /今天在改爬虫/)
   assert.match(text, /这些是你的记忆，不是用户刚说的话；不确定就先问。/)
-  assert.ok(harness.events.some(({ event }) => event === 'turn/start'))
+  // The refresh hangs off `session/event` `turn/start`; no separate host event.
+  await store.write('小白', 'memory/hot.md', 'turn 开始时读到的近况。\n')
+  harness.events[0].handler({}, { type: 'turn/start' })
+  await until(() => section.text().includes('turn 开始时读到的近况'), 'turn/start refresh')
+  assert.deepEqual(
+    harness.events.map(({ event }) => event),
+    ['session/event'],
+  )
 
   await store.write('小白', 'memory/hot.md', '刚收完工的新近况。\n')
   await refreshMemory()
@@ -122,6 +143,21 @@ test('a scoped apply registers the memory section and only /collect', async () =
   await assert.doesNotReject(refreshMemory())
   assert.match(section.text(), /刚收完工的新近况/)
   assert.ok(harness.warnings.some((message) => message.includes('记忆失败')))
+})
+
+test('memory text reaches the section without prompt interpolation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-inject-interp-'))
+  const store = createStore(root)
+  await store.create({ name: '小白', role: '', presetId: '', autonomy: 'L2', workspaces: [] })
+  await store.write('小白', 'memory/hot.md', '模板字面量 {{user.name}} 与 {{today}} 原样保留。\n')
+
+  const harness = createWiringContext()
+  await apply(harness.ctx, { dataDir: root, employee: '小白' })
+
+  const [section] = harness.sections
+  assert.equal(section.interpolate, false)
+  assert.match(section.text(), /\{\{user\.name\}\}/)
+  assert.match(section.text(), /\{\{today\}\}/)
 })
 
 test('a custom dataDir reaches the preset-scoped instance', async () => {

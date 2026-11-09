@@ -242,6 +242,18 @@ test('template rows resolve once and are reused by later creates', async () => {
   assert.equal(fake.calls.readDocument, 1)
 })
 
+test('/colleague new warns when the lazily resolved template has no rows', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-apply-norows-'))
+  const fake = fakeAgentPresets({ document: '' })
+  const harness = createApplyHarness(fake.service)
+  await apply(harness.ctx, { dataDir: root })
+
+  const result = await harness.commands[0].handler(invoke('new 小白'))
+
+  assert.equal(result.kind, 'success')
+  assert.deepEqual(harness.warnings, ['同事预设没有模板行，只含 Whalebuddy 自身'])
+})
+
 test('a failed preset registration is logged but still creates the colleague', async () => {
   const root = await mkdtemp(join(tmpdir(), 'whalebuddy-apply-fail-'))
   const fake = fakeAgentPresets({ failIds: ['whalebuddy:逆戟'] })

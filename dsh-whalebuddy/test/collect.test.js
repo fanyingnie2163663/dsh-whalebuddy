@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { apply } from '../lib/index.js'
+import { apply, createCollectCommand } from '../lib/index.js'
 import { createStore } from '../lib/store.js'
 
 const EMPTY_TRANSCRIPT = '这个会话没攒到可收的文字。'
@@ -59,7 +59,8 @@ function createScopedHarness({ events = true } = {}) {
 }
 
 /**
- * Feed one message event with a single text block.
+ * Feed one real message event: `user/message` carries the UserMessage as
+ * `data` itself, while `assistant/message` wraps it as `data.message`.
  * @param {ReturnType<typeof createScopedHarness>} harness
  * @param {'user/message' | 'assistant/message'} type
  * @param {string} text
@@ -67,8 +68,68 @@ function createScopedHarness({ events = true } = {}) {
 function emitText(harness, type, text) {
   const listener = harness.listeners.find((entry) => entry.event === 'session/event')
   assert.ok(listener, 'session/event listener is registered')
-  listener.handler({}, { type, data: { message: { content: [{ type: 'text', text }] } } })
+  const block = { type: 'text', text }
+  const data = type === 'assistant/message' ? { message: { content: [block] } } : { content: [block] }
+  listener.handler({}, { type, data })
 }
+
+test('a user correction is captured from the real user/message payload', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-collect-user-'))
+  await createStore(root).create(employee('小白'))
+  const harness = createScopedHarness()
+  await apply(harness.ctx, { dataDir: root, employee: '小白' })
+
+  emitText(harness, 'user/message', '以后别用反问句。')
+  emitText(harness, 'assistant/message', '好，直接说结论。')
+
+  const result = await harness.commands[0].handler({})
+
+  assert.deepEqual(result, { kind: 'success', text: '收工了。2 条新记忆' })
+  const store = createStore(root)
+  assert.match(await store.read('小白', 'memory/rapport.md'), /纠错：以后别用反问句/)
+  assert.deepEqual(JSON.parse(await store.read('小白', 'memory/tasks.json')), [])
+})
+
+test('a user promise becomes a task from the real user/message payload', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-collect-promise-'))
+  await createStore(root).create(employee('小白'))
+  const harness = createScopedHarness()
+  await apply(harness.ctx, { dataDir: root, employee: '小白' })
+
+  emitText(harness, 'user/message', '答应我周五前改完。')
+  emitText(harness, 'assistant/message', '好。')
+
+  const result = await harness.commands[0].handler({})
+
+  assert.deepEqual(result, { kind: 'success', text: '收工了。2 条新记忆' })
+  const store = createStore(root)
+  const tasks = JSON.parse(await store.read('小白', 'memory/tasks.json'))
+  assert.deepEqual(tasks.map((task) => task.text), ['答应我周五前改完'])
+  assert.equal(tasks[0].status, 'open')
+  assert.equal(await store.read('小白', 'memory/rapport.md'), '')
+})
+
+test('createCollectCommand tolerates a plain string transcript', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-collect-string-'))
+  const store = createStore(root)
+  await store.create(employee('小白'))
+
+  // Compatibility input: one assistant block, never a crash on a primitive.
+  const command = createCollectCommand({
+    store,
+    employee: '小白',
+    queue: { push: (slug, task) => task() },
+    transcript: '以后别用反问句。答应我周五前改完。',
+    refresh: async () => '',
+  })
+
+  const result = await command.handler()
+
+  assert.equal(result.kind, 'success')
+  assert.match(await store.read('小白', 'memory/rapport.md'), /纠错：以后别用反问句/)
+  const tasks = JSON.parse(await store.read('小白', 'memory/tasks.json'))
+  assert.deepEqual(tasks.map((task) => task.text), ['答应我周五前改完'])
+})
 
 test('/collect writes the distilled memory and refreshes only its own instance', async () => {
   const rootA = await mkdtemp(join(tmpdir(), 'whalebuddy-collect-a-'))

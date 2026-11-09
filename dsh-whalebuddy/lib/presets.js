@@ -6,8 +6,9 @@ import { parse as parseYaml } from 'yaml'
  *
  * 1. `config.presetRows` when it is a non-empty array of `{ id?, name, config? }`;
  * 2. otherwise the current default agent preset — `resolve()` for the id,
- *    `readDocument(id)` for the YAML, then `yaml.parse`: a top-level array is the
- *    row list, an object contributes its `plugins` or `rows` array;
+ *    `readDocument(id)` for the YAML, then `parsePresetDocument` (the Loader
+ *    dialect, so `!!js` stays `{ __jsExpr }`): a top-level array is the row
+ *    list, an object contributes its `plugins` or `rows` array;
  * 3. otherwise `[]` — `lib/index.js` then warns that the colleague preset
  *    carries Whalebuddy's own row only.
  *
@@ -51,6 +52,27 @@ import { parse as parseYaml } from 'yaml'
 
 /** Every colleague preset sorts after the built-in presets. */
 const PRESET_ORDER = 100
+
+/** The Loader's `!!js` tag id; its value is JavaScript source, not text. */
+const JS_EXPR_TAG = 'tag:yaml.org,2002:js'
+
+/**
+ * Parse a preset document in the Loader dialect. A plain `yaml.parse` turns a
+ * `!!js` expression into a truthy string, silently flipping every `disabled`
+ * row; the custom tag keeps it as the Loader's `{ __jsExpr: <source> }`.
+ * @param {string} content
+ * @returns {unknown}
+ */
+function parsePresetDocument(content) {
+  return parseYaml(content, {
+    customTags: [
+      {
+        tag: JS_EXPR_TAG,
+        resolve: (value) => ({ __jsExpr: value }),
+      },
+    ],
+  })
+}
 
 /** The id of Whalebuddy's own row inside a colleague preset. */
 const MEMORY_PLUGIN_ID = 'whalebuddy-memory'
@@ -139,7 +161,7 @@ export async function resolveTemplateRows(agentPresets, presetRows = []) {
     const id = current?.id
     if (typeof id !== 'string' || id === '') return []
     const document = await agentPresets.readDocument(id)
-    return rowsOf(parseYaml(document?.content ?? ''))
+    return rowsOf(parsePresetDocument(document?.content ?? ''))
   } catch {
     return []
   }

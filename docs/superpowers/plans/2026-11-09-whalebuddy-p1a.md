@@ -461,7 +461,8 @@ Expected: FAIL, module not found.
 - `config.employee` 非空 → 解析数据根、建 store、读 `profile/rapport/knowledge/hot/tasks/_shared`（缺失的归并为 `''`），`ctx.systemPrompt.section({ name: 'whalebuddy:memory', order: ctx.systemPrompt.getSectionOrder('HARNESS_IDENTITY') + 1, text: () => cached })`，`text` 必须是同步的。
 - `config.employee` 为空（profile 级加载）→ 不注册 section，只注册 `/colleague` 与员工预设。
 - `config.employee` 非空（预设作用域实例）→ **跳过** `/colleague` 与预设注册，只注册 section；否则每个会话都会再注册一遍命令和预设。
-- 缓存：apply 时读一次；`ctx.on('turn/start', ...)` 与 `/收工` 之后各刷新一次（异步读、同步取）；读失败返回空字符串并记日志，绝不抛。
+- 缓存：apply 时读一次；`session/event` 的 `turn/start` 与 `/收工` 之后各刷新一次（异步读、同步取）；读失败返回空字符串并记日志，绝不抛。
+- 刷新挂在 `session/event` 的 `turn/start` 上，不是 host 事件：同一个监听器先累积 text，再在 `event.type === 'turn/start'` 时调用 refresh。
 - `getSectionOrder` 用 `try/catch` 包一层，未知名字退回 `1000`。
 
 - [ ] **Step 5: Run the tests to verify they pass**
@@ -598,7 +599,7 @@ Expected: `~/.dsh/whalebuddy/小白/profile.md` 与 `index.json` 出现；`agent
 
 - [ ] **Step 2: 开她的会话并留下记忆**
 
-用 `whalebuddy:小白` 预设开新会话，说一句"以后别用反问句"，然后 `/收工`。
+用 `whalebuddy:小白` 预设开新会话，说一句"以后别用反问句"，然后 `/collect`。
 Expected: `memory/rapport.md` 出现当天的纠错条目；`memory/log/` 出现当天文件。
 
 - [ ] **Step 3: 新会话验证注入**

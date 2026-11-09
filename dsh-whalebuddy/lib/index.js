@@ -69,6 +69,8 @@ const COLLECT_EMPTY = '这个会话没攒到可收的文字。'
 const MESSAGE_EVENT_TYPES = ['user/message', 'assistant/message']
 /** Only the newest 8000 transcript characters are distilled on command. */
 const TRANSCRIPT_LIMIT = 8000
+/** Same warning for the load-time and the lazy template resolution paths. */
+const NO_TEMPLATE_ROWS = '同事预设没有模板行，只含 Whalebuddy 自身'
 /** Serializes every collect's read-modify-write per employee across instances. */
 const collectQueue = createQueue()
 
@@ -299,7 +301,9 @@ function todayStamp(date = new Date()) {
 function recordTranscript(buffer, event) {
   if (!MESSAGE_EVENT_TYPES.includes(event?.type)) return
   const role = event.type === 'user/message' ? 'user' : 'assistant'
-  const content = event?.data?.message?.content
+  // A `user/message` event's `data` is the UserMessage itself; an
+  // `assistant/message` event wraps it as `data.message` (see the host events).
+  const content = event.type === 'assistant/message' ? event.data?.message?.content : event.data?.content
   if (typeof content === 'string') {
     buffer.push({ role, text: content })
     return
@@ -361,15 +365,22 @@ async function appendLog(store, employee, date, entry) {
  * @returns {{ name: string, description: string, handler: () => Promise<CommandResult> }}
  */
 export function createCollectCommand({ store, employee, queue, transcript, refresh }) {
+  // Compatibility: a caller may still pass one plain string. It counts as a
+  // single assistant block; the documented input type stays TranscriptBlock[].
+  /** @type {TranscriptBlock[] | string} */
+  const input = transcript
+  /** @type {TranscriptBlock[]} */
+  const blocks = typeof input === 'string' ? [{ role: 'assistant', text: input }] : input
+
   return {
     name: COLLECT_COMMAND_NAME,
     description: COLLECT_COMMAND_DESCRIPTION,
     async handler() {
-      const joined = transcript.map((block) => block.text).join('\n\n').trim()
+      const joined = blocks.map((block) => block.text).join('\n\n').trim()
       const text = joined.slice(-TRANSCRIPT_LIMIT)
       if (text === '') return { kind: 'error', text: COLLECT_EMPTY }
 
-      const extraction = ruleExtractor(text, transcript)
+      const extraction = ruleExtractor(text, blocks)
       try {
         await queue.push(employee, async () => {
           const [hot, rapport, knowledge, tasks] = await Promise.all([
@@ -392,7 +403,7 @@ export function createCollectCommand({ store, employee, queue, transcript, refre
         return { kind: 'error', text: `收工失败：${describeError(error)}` }
       }
 
-      transcript.length = 0
+      blocks.length = 0
       const added = countNewMemories(extraction)
       return added > 0
         ? { kind: 'success', text: `${COLLECT_SUCCESS}${added} 条新记忆` }
@@ -443,22 +454,20 @@ async function applyScoped(ctx, config, employee) {
   }
 
   /**
-   * Role-tagged text of real messages; `/collect` joins and clears it.
+   * Role-tagged text of real messages; `/collect` joins and clears it. The
+   * same listener refreshes the cache at every turn start, so a new turn sees
+   * what `/collect` wrote in the previous one.
    * @type {TranscriptBlock[]}
    */
   const transcript = []
   if (typeof ctx.on === 'function') {
     try {
-      ctx.on('session/event', (session, event) => recordTranscript(transcript, event))
-    } catch (error) {
-      warn(ctx, `监听 session/event 失败：${describeError(error)}`)
-    }
-    try {
-      ctx.on('turn/start', () => {
-        void refresh()
+      ctx.on('session/event', (session, event) => {
+        recordTranscript(transcript, event)
+        if (event?.type === 'turn/start') void refresh()
       })
     } catch (error) {
-      warn(ctx, `监听 turn/start 失败：${describeError(error)}`)
+      warn(ctx, `监听 session/event 失败：${describeError(error)}`)
     }
   }
 
@@ -481,6 +490,8 @@ async function applyScoped(ctx, config, employee) {
     systemPrompt.section({
       name: MEMORY_SECTION_NAME,
       order: memorySectionOrder(ctx),
+      // Memory is data, not a prompt template: literal `{{...}}` must survive.
+      interpolate: false,
       text: () => cached,
     })
   } catch (error) {
@@ -555,13 +566,9 @@ export async function apply(ctx, config) {
    * @returns {Promise<void>}
    */
   const registerCreated = async (employee) => {
-    const dispose = await registerEmployeePresets(
-      agentPresets,
-      [employee],
-      await resolveRowsOnce(),
-      ctx.logger,
-      root,
-    )
+    const rows = await resolveRowsOnce()
+    if (rows.length === 0) warn(ctx, NO_TEMPLATE_ROWS)
+    const dispose = await registerEmployeePresets(agentPresets, [employee], rows, ctx.logger, root)
     disposers.push(dispose)
   }
 
@@ -589,7 +596,7 @@ export async function apply(ctx, config) {
   if (employees.length === 0) return
 
   const rows = await resolveRowsOnce()
-  if (rows.length === 0) warn(ctx, '同事预设没有模板行，只含 Whalebuddy 自身')
+  if (rows.length === 0) warn(ctx, NO_TEMPLATE_ROWS)
 
   disposers.push(await registerEmployeePresets(agentPresets, employees, rows, ctx.logger, root))
 }
