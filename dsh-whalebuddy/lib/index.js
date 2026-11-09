@@ -2,9 +2,11 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import Schema from 'schemastery'
 import { DEFAULT_NAMES } from './names.js'
+import { registerEmployeePresets, resolveTemplateRows } from './presets.js'
 import { createStore } from './store.js'
 
 /**
+ * @typedef {import('./presets.js').PresetRow} PresetRow
  * @typedef {import('./store.js').Store} Store
  */
 
@@ -23,6 +25,7 @@ export const name = 'dsh-whalebuddy'
 export const inject = ['commands']
 export const Config = Schema.object({
   dataDir: Schema.string().default(''),
+  presetRows: Schema.array(Schema.any()).default([]),
 })
 
 const COMMAND_NAME = 'colleague'
@@ -62,6 +65,27 @@ export function resolveDataDir(ctx, config) {
  */
 function describeError(error) {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Warn without requiring a complete logger; the harness always provides one.
+ * @param {*} ctx
+ * @param {string} message
+ * @returns {void}
+ */
+function warn(ctx, message) {
+  const logger = ctx?.logger
+  if (typeof logger?.warn === 'function') logger.warn(message)
+}
+
+/**
+ * Template rows from the plugin config; absent configuration means `[]`.
+ * @param {{ presetRows?: unknown }} [config]
+ * @returns {PresetRow[]}
+ */
+function presetRowsOf(config) {
+  const rows = config?.presetRows
+  return Array.isArray(rows) ? rows : []
 }
 
 /**
@@ -133,9 +157,37 @@ async function createEmployee(store, employeeName) {
   return { kind: 'success', text: `已创建同事「${employeeName}」（${employee.slug}）。` }
 }
 
-export function apply(ctx, config) {
+/**
+ * Load the plugin: register `/colleague`, then one agent preset per colleague.
+ * A corrupt `index.json` only skips preset registration — it never fails the
+ * plugin load. Without an `agentPresets` service the command still works.
+ * @param {*} ctx
+ * @param {{ dataDir?: string, presetRows?: PresetRow[] }} config
+ * @returns {Promise<void>}
+ */
+export async function apply(ctx, config) {
   const root = resolveDataDir(ctx, config)
   ctx.logger.info('whalebuddy loaded (dataDir=%s)', root)
   const store = createStore(root)
   ctx.effect(() => ctx.commands.register(createEmployeeCommand(store)))
+
+  let employees
+  try {
+    employees = await store.list()
+  } catch (error) {
+    warn(ctx, `读取同事列表失败（${describeError(error)}），本次不注册同事预设`)
+    return
+  }
+
+  const agentPresets = typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined
+  if (!agentPresets || typeof agentPresets.register !== 'function') {
+    warn(ctx, '没有 agentPresets 服务，跳过同事预设注册')
+    return
+  }
+
+  const rows = await resolveTemplateRows(agentPresets, presetRowsOf(config))
+  if (rows.length === 0) warn(ctx, '同事预设没有模板行，只含 Whalebuddy 自身')
+
+  const dispose = await registerEmployeePresets(agentPresets, employees, rows, ctx.logger)
+  ctx.effect(() => dispose)
 }
