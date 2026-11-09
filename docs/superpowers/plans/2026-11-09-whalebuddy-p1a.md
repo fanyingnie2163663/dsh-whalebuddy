@@ -491,7 +491,7 @@ git commit -m "feat(whalebuddy): memory injection with budget"
 ```ts
 type Extraction = { report?: string; promises?: string[]; corrections?: string[]; facts?: string[] }
 type Extractor = (transcript: string, previous: { hot: string; rapport: string }) => Promise<Extraction>
-mergeExtraction(prev: { hot: string; rapport: string; tasks: Task[] }, x: Extraction, now: string): { hot: string; rapport: string; tasks: Task[]; logEntry: string }
+mergeExtraction(prev: { hot: string; rapport: string; knowledge: string; tasks: Task[] }, x: Extraction, now: string): { hot: string; rapport: string; knowledge: string; tasks: Task[]; logEntry: string }
 createQueue(): { push(slug: string, task: () => Promise<void>): Promise<void> }
 ruleExtractor(transcript: string): Extraction
 ```
@@ -507,7 +507,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mergeExtraction, ruleExtractor, createQueue } from '../lib/distill.js'
 
-const prev = { hot: '', rapport: '', tasks: [] }
+const prev = { hot: '', rapport: '', knowledge: '', tasks: [] }
 
 test('promises become open tasks', () => {
   const out = mergeExtraction(prev, { promises: ['周五前把登录改完'] }, '2026-11-09')
@@ -519,6 +519,11 @@ test('promises become open tasks', () => {
 test('corrections land in rapport with a date', () => {
   const out = mergeExtraction(prev, { corrections: ['别用反问句'] }, '2026-11-09')
   assert.match(out.rapport, /2026-11-09.*别用反问句/)
+})
+
+test('facts land in knowledge', () => {
+  const out = mergeExtraction(prev, { facts: ['项目根目录是 D:/repo'] }, '2026-11-09')
+  assert.match(out.knowledge, /D:\/repo/)
 })
 
 test('hot memory keeps the newest 800 characters', () => {
@@ -560,12 +565,17 @@ Expected: FAIL, module not found.
 
 - [ ] **Step 4: 接到命令与写回**
 
-`index.js` 注册 `/收工`：取当前会话的 employee；把本会话的 `user/message` 与 `assistant/message` 文本拼起来（上限 8000 字）；`await ruleExtractor(transcript)` 得到 `Extraction`；用**同一员工的队列**包住「读三个文件 → `mergeExtraction` → 原子写回」——`queue.push(slug, async () => { ... })`。
+`/收工` 只在**预设作用域实例**里注册（`config.employee` 已知）；profile 级实例不注册。
+
+- 文本来源：作用域内 `ctx.on('session/event', (session, event) => ...)`（先判 `typeof ctx.on === 'function'`），把 `user/message` 与 `assistant/message` 的 text 块累积进缓冲区；命令触发时 join、截到 8000 字，收工后清空。
+- 执行：`ruleExtractor(transcript)` → `queue.push(slug, async () => { 读 hot/rapport/knowledge/tasks → mergeExtraction → 写回 knowledge/rapport/tasks/hot 与 memory/log/<today>.md → 调本作用域的 refreshMemory() })`。
+- 成功返回 `{kind:'success', text:'收工了。<N> 条新记忆'}`；失败返回 `{kind:'error'}`。
+- 没有事件 API、或缓冲区为空 → 返回 error 提示"这个会话没攒到可收的文字"，不写空记录。
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `cd dsh-whalebuddy && node --test test/distill.test.js`
-Expected: PASS, 7 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 6: Commit**
 
