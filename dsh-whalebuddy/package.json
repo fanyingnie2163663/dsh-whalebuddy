@@ -35,6 +35,15 @@
     "schemastery": "^3.18.0"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "lint": "oxlint lib test",
+    "check": "npm run typecheck && npm run lint && node --test",
+    "test:coverage": "node --test --experimental-test-coverage"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "oxlint": "^1.93.0",
+    "typescript": "^5.9.3"
   }
 }
