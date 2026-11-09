@@ -459,7 +459,8 @@ Expected: FAIL, module not found.
 `AssembleContext` 只有 `{ scope, signal }`，拿不到会话；正确做法是让员工预设把本插件按 `config: { employee: slug }` 加载一份，插件在**这个被作用域化的上下文**里注册 section：
 
 - `config.employee` 非空 → 解析数据根、建 store、读 `profile/rapport/knowledge/hot/tasks/_shared`（缺失的归并为 `''`），`ctx.systemPrompt.section({ name: 'whalebuddy:memory', order: ctx.systemPrompt.getSectionOrder('HARNESS_IDENTITY') + 1, text: () => cached })`，`text` 必须是同步的。
-- `config.employee` 为空（profile 级加载）→ 不注册 section，只注册 `/colleague`。
+- `config.employee` 为空（profile 级加载）→ 不注册 section，只注册 `/colleague` 与员工预设。
+- `config.employee` 非空（预设作用域实例）→ **跳过** `/colleague` 与预设注册，只注册 section；否则每个会话都会再注册一遍命令和预设。
 - 缓存：apply 时读一次；`ctx.on('turn/start', ...)` 与 `/收工` 之后各刷新一次（异步读、同步取）；读失败返回空字符串并记日志，绝不抛。
 - `getSectionOrder` 用 `try/catch` 包一层，未知名字退回 `1000`。
 
