@@ -454,9 +454,14 @@ Expected: FAIL, module not found.
 
 按预算顺序拼 Markdown 段落（`### 身份`、`### 默契`、`### 待办`、`### 近况`、`### 关于你`）。截断按字符数近似 token（1 token ≈ 2 中文字符），保留句子边界优先。待办只列 `status === 'open'` 的前 8 条。
 
-- [ ] **Step 4: 接到 `systemPrompt`**
+- [ ] **Step 4: 接到 `systemPrompt`（按 `config.employee` 作用域）**
 
-`index.js`：`ctx.systemPrompt.section({ name: 'whalebuddy:memory', order: ctx.systemPrompt.getSectionOrder('HARNESS_IDENTITY') + 1, text: (assembly) => { ... 用 assembly 找到当前会话的 employee，读文件，assembleMemory ... } })`。会话到员工的映射从会话头 `agentPreset` 解析：`whalebuddy:<slug>`；不是我们的预设就返回空字符串。文件读取失败时返回空字符串并记日志，不抛。
+`AssembleContext` 只有 `{ scope, signal }`，拿不到会话；正确做法是让员工预设把本插件按 `config: { employee: slug }` 加载一份，插件在**这个被作用域化的上下文**里注册 section：
+
+- `config.employee` 非空 → 解析数据根、建 store、读 `profile/rapport/knowledge/hot/tasks/_shared`（缺失的归并为 `''`），`ctx.systemPrompt.section({ name: 'whalebuddy:memory', order: ctx.systemPrompt.getSectionOrder('HARNESS_IDENTITY') + 1, text: () => cached })`，`text` 必须是同步的。
+- `config.employee` 为空（profile 级加载）→ 不注册 section，只注册 `/colleague`。
+- 缓存：apply 时读一次；`ctx.on('turn/start', ...)` 与 `/收工` 之后各刷新一次（异步读、同步取）；读失败返回空字符串并记日志，绝不抛。
+- `getSectionOrder` 用 `try/catch` 包一层，未知名字退回 `1000`。
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
