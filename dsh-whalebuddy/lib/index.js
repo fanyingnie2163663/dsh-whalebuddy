@@ -1,11 +1,13 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import Schema from 'schemastery'
+import { assembleMemory } from './inject.js'
 import { DEFAULT_NAMES } from './names.js'
 import { registerEmployeePresets, resolveTemplateRows } from './presets.js'
 import { createStore } from './store.js'
 
 /**
+ * @typedef {import('./inject.js').MemoryFiles} MemoryFiles
  * @typedef {import('./presets.js').PresetRow} PresetRow
  * @typedef {import('./store.js').EmployeeSummary} EmployeeSummary
  * @typedef {import('./store.js').Store} Store
@@ -29,10 +31,13 @@ import { createStore } from './store.js'
  */
 
 export const name = 'dsh-whalebuddy'
-export const inject = ['commands']
+export const inject = ['commands', 'systemPrompt']
 export const Config = Schema.object({
   dataDir: Schema.string().default(''),
   presetRows: Schema.array(Schema.any()).default([]),
+  // Set by a colleague preset (`config: { employee: '<slug>' }`); empty on the
+  // profile-level load, which owns the command and the preset registry.
+  employee: Schema.string().default(''),
 })
 
 const COMMAND_NAME = 'colleague'
@@ -44,6 +49,14 @@ const EMPTY_LIST = '还没有同事：/colleague new 小白'
 const UNNAMED_ROLE = '未定'
 const DEFAULT_AUTONOMY = 'L2'
 const DATA_DIR_NAME = 'whalebuddy'
+/** The prompt section a preset-scoped instance owns. */
+const MEMORY_SECTION_NAME = 'whalebuddy:memory'
+/** Cut-in slot when the harness cannot order `HARNESS_IDENTITY`. */
+const FALLBACK_MEMORY_ORDER = 1000
+const HARNESS_IDENTITY_SECTION = 'HARNESS_IDENTITY'
+/** `_shared/` sits beside the employee directories, not inside one. */
+const SHARED_SLUG = '_shared'
+const SHARED_USER_FILE = 'user.md'
 
 /**
  * Resolve the colleague data root: the configured directory when it is
@@ -184,17 +197,165 @@ async function createEmployee(store, employeeName, options = {}) {
   return { kind: 'success', text: `已创建同事「${employeeName}」（${employee.slug}）。` }
 }
 
+/** @type {null | (() => Promise<string>)} */
+let memoryRefresher = null
+
 /**
- * Load the plugin: register `/colleague`, then one agent preset per colleague.
- * A colleague created later gets its preset registered immediately, reusing
- * the template rows resolved at load. A corrupt `index.json` only skips preset
- * registration — it never fails the plugin load. Without an `agentPresets`
- * service the command still works.
+ * Refresh the memory of the active preset-scoped instance. `/收工` calls this
+ * after writing the distilled memory back, so the next assembly sees it. A
+ * profile-level load has no scoped instance, so this is a no-op there.
+ * @returns {Promise<string | undefined>}
+ */
+export async function refreshMemory() {
+  if (memoryRefresher === null) return undefined
+  return memoryRefresher()
+}
+
+/**
+ * Order the memory section right after the harness identity. Unknown names
+ * throw (or return a non-number) in some builds, hence the guarded fallback.
  * @param {*} ctx
- * @param {{ dataDir?: string, presetRows?: PresetRow[] }} config
+ * @returns {number}
+ */
+function memorySectionOrder(ctx) {
+  try {
+    const systemPrompt = ctx?.systemPrompt
+    if (typeof systemPrompt?.getSectionOrder === 'function') {
+      const order = systemPrompt.getSectionOrder(HARNESS_IDENTITY_SECTION)
+      if (typeof order === 'number' && Number.isFinite(order)) return order + 1
+    }
+  } catch {
+    // Fall through to the late slot.
+  }
+  return FALLBACK_MEMORY_ORDER
+}
+
+/**
+ * Read one employee file; a missing file coalesces to `''` (ruling R4).
+ * @param {Store} store
+ * @param {string} slug
+ * @param {string} rel
+ * @returns {Promise<string>}
+ */
+async function readMemoryText(store, slug, rel) {
+  const text = await store.read(slug, rel)
+  return typeof text === 'string' ? text : ''
+}
+
+/**
+ * Read every file the opening injection assembles. Missing files become `''`
+ * and a missing task file becomes `[]`; a corrupt file throws and leaves the
+ * previous cache in place.
+ * @param {Store} store
+ * @param {string} employee
+ * @returns {Promise<MemoryFiles>}
+ */
+async function readMemoryFiles(store, employee) {
+  const [profile, rapport, knowledge, hot, tasks, shared] = await Promise.all([
+    readMemoryText(store, employee, 'profile.md'),
+    readMemoryText(store, employee, 'memory/rapport.md'),
+    readMemoryText(store, employee, 'memory/knowledge.md'),
+    readMemoryText(store, employee, 'memory/hot.md'),
+    store.tasks(employee),
+    readMemoryText(store, SHARED_SLUG, SHARED_USER_FILE),
+  ])
+  return { profile, rapport, knowledge, hot, tasks, shared }
+}
+
+/**
+ * Preset-scoped load: cache the colleague's memory and expose it as one prompt
+ * section. The command and the preset registry belong to the profile-level
+ * load, so this mode deliberately skips both; otherwise every session of the
+ * colleague would register them again. The section provider is synchronous,
+ * reads the cache, and never throws.
+ * @param {*} ctx
+ * @param {{ dataDir?: string, employee?: string }} config
+ * @param {string} employee
+ * @returns {Promise<void>}
+ */
+async function applyScoped(ctx, config, employee) {
+  const root = resolveDataDir(ctx, config)
+  const store = createStore(root)
+  const systemPrompt = ctx?.systemPrompt
+
+  if (typeof systemPrompt?.section !== 'function') {
+    warn(ctx, '没有 systemPrompt 服务，跳过记忆注入')
+    return
+  }
+
+  let cached = ''
+
+  /**
+   * Read, assemble and cache again. Failures are logged and the last good text
+   * stays; the section provider must never throw into prompt assembly.
+   * @returns {Promise<string>}
+   */
+  const refresh = async () => {
+    try {
+      const files = await readMemoryFiles(store, employee)
+      cached = assembleMemory(files)
+      return cached
+    } catch (error) {
+      warn(ctx, `读取「${employee}」的记忆失败：${describeError(error)}`)
+      return cached
+    }
+  }
+
+  memoryRefresher = refresh
+  if (typeof ctx.effect === 'function') {
+    ctx.effect(() => () => {
+      if (memoryRefresher === refresh) memoryRefresher = null
+    })
+  }
+  if (typeof ctx.on === 'function') {
+    try {
+      ctx.on('turn/start', () => {
+        void refresh()
+      })
+    } catch (error) {
+      warn(ctx, `监听 turn/start 失败：${describeError(error)}`)
+    }
+  }
+
+  // Load once at apply so the first assembly already sees the memory.
+  await refresh()
+
+  try {
+    systemPrompt.section({
+      name: MEMORY_SECTION_NAME,
+      order: memorySectionOrder(ctx),
+      text: () => cached,
+    })
+  } catch (error) {
+    warn(ctx, `注册记忆段失败：${describeError(error)}`)
+  }
+
+  if (typeof ctx?.logger?.info === 'function') {
+    ctx.logger.info('whalebuddy memory loaded (employee=%s, dataDir=%s)', employee, root)
+  }
+}
+
+/**
+ * Load the plugin in one of two modes, chosen by `config.employee`:
+ *
+ * - non-empty (a colleague preset's scoped copy): inject that colleague's
+ *   memory as a prompt section and nothing else;
+ * - empty (the profile-level load): register `/colleague`, then one agent
+ *   preset per colleague. A colleague created later gets its preset registered
+ *   immediately, reusing the template rows resolved at load. A corrupt
+ *   `index.json` only skips preset registration — it never fails the plugin
+ *   load. Without an `agentPresets` service the command still works.
+ * @param {*} ctx
+ * @param {{ dataDir?: string, presetRows?: PresetRow[], employee?: string }} config
  * @returns {Promise<void>}
  */
 export async function apply(ctx, config) {
+  const employee = typeof config?.employee === 'string' ? config.employee.trim() : ''
+  if (employee !== '') {
+    await applyScoped(ctx, config, employee)
+    return
+  }
+
   const root = resolveDataDir(ctx, config)
   ctx.logger.info('whalebuddy loaded (dataDir=%s)', root)
   const store = createStore(root)
