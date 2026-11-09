@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Whalebuddy">
+  <rect width="64" height="64" rx="14" fill="#0b2740"/>
+  <path d="M9 36c0-6.1 4.7-11 10.5-11h13c5.5 0 10.1 3.3 12.2 8l5.9-4.4c1.6-1.2 3.9.1 3.5 2.1l-1.6 8.6c-.3 1.7-2.5 2.3-3.7.9l-3.8-4.4C42.6 41.8 37.3 45 31.4 45H19.5C13.7 45 9 40.1 9 34v2z" fill="#5dd0f5"/>
+  <circle cx="19.5" cy="32.5" r="2.2" fill="#0b2740"/>
+  <path d="M17 20.5c1.8-3.1 4.8-5 8.2-5 3.4 0 6.4 1.9 8.2 5" fill="none" stroke="#5dd0f5" stroke-width="2.4" stroke-linecap="round" opacity=".65"/>
+</svg>

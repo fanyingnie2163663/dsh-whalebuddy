@@ -1,0 +1,5 @@
+# Whalebuddy bundle patch: inserts the Host plugin row.
+# The Client half is resolved from the dsh.client manifest, so it needs no row here.
+- insert:
+    - id: whalebuddy
+      name: dsh-whalebuddy
