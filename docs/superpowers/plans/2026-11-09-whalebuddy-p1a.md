@@ -625,3 +625,13 @@ git commit -m "docs(whalebuddy): P1a acceptance notes"
 
 - **P1b**：侧边栏员工列表、创建向导、详情页——单独一份计划。
 - **P2 及以后**：完整提炼管线、待确认队列、公共档案编辑、L2 调度、L3、召回；各自成计划。
+
+## T7 验收记录（2026-11-10，真机）
+
+- 安装：`plugin_manager install_bundle` → `application: applied`；profile 以 `link` 方式引入。
+- 步骤 1 创建：`/colleague new 小白` → 目录、`profile.md`、`index.json`、预设 `whalebuddy:小白` 均出现。
+- 步骤 2 收工：`/collect` → `rapport.md` / `hot.md` / `log/2026-11-10.md` 写入。
+- 步骤 3 换会话：新会话准确复述「以后别用反问句」，记忆注入生效。
+- 步骤 4 故障：删掉 `memory/` 后照常回话，无崩溃，只剩身份段；测完已还原。
+- 缺陷与修复：纠错误取 assistant 回声 → commit `2635304`（评审通过，70 测试）。
+- 待复验：重启后新会话再收一次工，确认只记用户原话。
