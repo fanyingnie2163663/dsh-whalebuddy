@@ -1475,6 +1475,7 @@
         ),
         h('div', { className: 'wb-wizardFoot' },
           h('button', { type: 'button', className: 'wb-btn', disabled: wizard.step === 0, onClick: wizardBack }, '上一步'),
+          h('button', { type: 'button', className: 'wb-btn', onClick: function () { setWizard(null) } }, '取消'),
           h('span', { className: 'wb-hint' }, '两分钟就能上岗；名字之后也能改。'),
           wizard.step === STEPS.length - 1
             ? h('button', { type: 'button', className: 'wb-btn wb-btnPrimary', disabled: busy, onClick: function () { void submitWizard() } }, busy ? '创建中…' : '建她')
