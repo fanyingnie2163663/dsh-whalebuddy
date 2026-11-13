@@ -271,6 +271,43 @@ test('the sidebar glyph is drawn at the size the shell asks for', () => {
   assert.equal(textOf(findAll(icon, (node) => node.type === 'title')[0]), 'Whalebuddy')
 })
 
+test('the watcher marks the real rail row when the glyph is not ours', async () => {
+  const row = {
+    textContent: 'Whalebuddy',
+    classes: new Set(),
+    classList: {
+      add(name) {
+        row.classes.add(name)
+      },
+      remove(name) {
+        row.classes.delete(name)
+      },
+    },
+  }
+  const doc = {
+    querySelector() {
+      return null
+    },
+    querySelectorAll(selector) {
+      if (selector === '.wb-row-unread') return []
+      if (selector === '*') return [row]
+      return [row]
+    },
+  }
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    async json() {
+      return { unread: 2, latest: { slug: 'niji', name: '逆戟', text: '收工：待办 +2', at: Date.now() } }
+    },
+  })
+
+  mountPlugin({ fetch: fetchImpl, globals: { document: doc }, window: { setInterval: () => 1, clearInterval: () => {} } })
+  await new Promise((resolve) => setImmediate(resolve))
+
+  assert.equal(row.classes.has('wb-row-unread'), true)
+})
+
 test('the sidebar glyph polls notices and paints its own dot', async () => {
   const titleNode = { textContent: '' }
   const svgNode = {

@@ -151,6 +151,8 @@
     '.wb-chips{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}',
     '.wb-chip{display:inline-flex;align-items:center;height:24px;padding:0 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:999px;font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap}',
     '.wb-chipMono{font-family:var(--ds-font-family-code);font-size:10.5px}',
+    '.wb-row-unread{position:relative}',
+    '.wb-row-unread::after{content:"";position:absolute;top:50%;right:10px;width:5px;height:5px;margin-top:-2.5px;border-radius:50%;background:var(--wb-clay)}',
     '.wb-iconDot{display:none}',
     'svg[data-wb-unread="1"] .wb-iconDot{display:inline}',
     '.wb-tabs{flex:none;display:flex;gap:2px;margin-top:14px;padding:0 22px;border-bottom:1px solid var(--dsw-alias-border-l1);overflow-x:auto}',
@@ -369,6 +371,41 @@
    * @param {{ api: ReturnType<typeof createApi>, document?: Document, timers?: { setInterval: Function, clearInterval: Function }, intervalMs?: number }} options
    * @returns {{ start: () => void, stop: () => void, refresh: () => Promise<void>, apply: (payload: *) => void }}
    */
+  /**
+   * The shell may draw the rail row from the package's `icon.svg` instead of
+   * the glyph component, so the dot must live on the row itself. Find the row
+   * by its label text and mark it; the stylesheet draws the dot.
+   * @param {Document} doc
+   * @param {number} unread
+   * @returns {void}
+   */
+  function paintRowBadge(doc, unread) {
+    if (!doc || typeof doc.querySelectorAll !== 'function') return
+    var marked = doc.querySelectorAll('.wb-row-unread')
+    for (var index = 0; index < marked.length; index += 1) {
+      if (marked[index] && marked[index].classList) marked[index].classList.remove('wb-row-unread')
+    }
+    if (unread <= 0) return
+
+    var hit = null
+    var candidates = doc.querySelectorAll('button,a,[role="button"],[role="menuitem"],[tabindex]')
+    for (var candidate = 0; candidate < candidates.length; candidate += 1) {
+      var text = candidates[candidate].textContent ? candidates[candidate].textContent.trim() : ''
+      if (text === 'Whalebuddy') {
+        hit = candidates[candidate]
+        break
+      }
+    }
+    if (hit === null) {
+      var all = doc.querySelectorAll('*')
+      for (var node = 0; node < all.length; node += 1) {
+        var label = all[node].textContent ? all[node].textContent.trim() : ''
+        if (label === 'Whalebuddy') hit = all[node]
+      }
+    }
+    if (hit !== null && hit.classList) hit.classList.add('wb-row-unread')
+  }
+
   function createNoticeWatcher(options) {
     var api = options.api
     var doc = options.document
@@ -382,10 +419,11 @@
      * @returns {void}
      */
     function apply(payload) {
-      if (!doc || typeof doc.querySelector !== 'function') return
-      var svg = doc.querySelector('svg[data-wb-unread]')
-      if (svg === null || svg === undefined || typeof svg.setAttribute !== 'function') return
+      if (!doc) return
       var unread = payload && typeof payload.unread === 'number' && payload.unread > 0 ? payload.unread : 0
+      paintRowBadge(doc, unread)
+      var svg = typeof doc.querySelector === 'function' ? doc.querySelector('svg[data-wb-unread]') : null
+      if (svg === null || svg === undefined || typeof svg.setAttribute !== 'function') return
       svg.setAttribute('data-wb-unread', unread > 0 ? '1' : '0')
       var title = typeof svg.querySelector === 'function' ? svg.querySelector('title') : null
       if (title !== null && title !== undefined) {
