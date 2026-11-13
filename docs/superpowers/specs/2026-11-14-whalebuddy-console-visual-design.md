@@ -152,7 +152,7 @@
 | `dsh-whalebuddy/lib/client.js` | 重写 CSS 与渲染层；保留 `createApi`、保存、待办、工作区、创建的网络逻辑；新增纯函数（头像字、活跃文案、档案解析、行号、变更解析）与组件（列表、档案头、五个页、预览、向导） |
 | `dsh-whalebuddy/test/client-bundle.test.js` | 更新旧断言（标题、标签、类名）；新增活跃文案、行号、变更解析、向导步骤与创建提交的用例 |
 | `dsh-whalebuddy/test/console-mount.test.js` | 如有 DOM 断言则同步；`data-dsh-part` 保持稳定 |
-| `README.md` + `docs/assets/screenshots/*.png` | 落地后重拍创建 / 在场 / 详情三张 |
+| `README.md` + `docs/assets/screenshots/*.png` | 已换成创建 / 在场 / 记忆 / 注入预览四张真界面截图 |
 
 不新建依赖、不改 `package.json` 的脚本。
 

@@ -64,11 +64,15 @@ LICENSE
 
 ## 界面
 
-设计稿（`designs/` 中的源文件未随仓库发布）：
+面板默认深色，右上角一键切浅色。下面是真实界面（`designs/` 里的画板与预览脚本不进仓库）：
 
 ![创建同事](docs/assets/screenshots/create.png)
 
 ![同事控制台](docs/assets/screenshots/presence.png)
+
+![记忆与出处](docs/assets/screenshots/detail.png)
+
+![注入预览](docs/assets/screenshots/preview.png)
 
 ## 开发
 
