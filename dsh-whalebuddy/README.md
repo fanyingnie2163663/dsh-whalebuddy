@@ -47,19 +47,23 @@
 
 ## 面板
 
-宿主在 Web 服务器上注册五条本机路由：
+宿主在 Web 服务器上注册七条本机路由：
 
 | 方法 | 路径 | 作用 |
 |---|---|---|
 | GET | `/api/whalebuddy/state?slug=` | 同事列表 + 该同事的可编辑文件 + 注入预览 |
 | POST | `/api/whalebuddy/save` | `{slug, rel, text}` → 写入白名单文件并返回新预览 |
-| POST | `/api/whalebuddy/update` | `{slug, autonomy}` → 改档位，同时写 `profile.md` 与 `state.json`，返回刷新后的面板 |
+| POST | `/api/whalebuddy/update` | `{slug, autonomy?, noticeCap?}` → 改档位或每日上限（至少一个），返回刷新后的面板 |
+| GET | `/api/whalebuddy/notices` | 全员未读聚合（只计 L2/L3），给侧栏点用 |
+| POST | `/api/whalebuddy/notices/read` | `{slug, id?}` → 标一条或全部已读，返回新聚合 |
 | POST | `/api/whalebuddy/create` | `{name, role, autonomy, temperament}` → 新建同事 |
 | POST | `/api/whalebuddy/assign` | `{slug, workspaceId}` → 把工作区路径写进档案并返回新预览 |
 
 只接受本机请求（有 `connection` 服务时先走它的拒绝判定）；写入仅限 `profile.md`、`memory/{hot,rapport,knowledge}.md`、`memory/tasks.json`、`_shared/roster.md`，单文件 64 KB 上限。
 
 「档案」页的主动性卡点 L1/L2/L3 即改档位：`profile.md` 的「档位」行与 `state.json` 的快照一起改写，索引随之刷新，变更记进 `memory/changelog.md`；档案有未保存改动时先保存再改。反过来，直接在「档案原文」里把「档位」行改成 L1/L2/L3 再保存，也会把 `state.json` 和索引同步过去——两个入口不会各说各话。
+
+「她的话」在档案页顶部：`/collect` 收工后如果这次真提炼出东西，会留一句便签（报告首句 + 变更计数）；L2/L3 每天最多 N 条（默认 2，主动性卡里 1–5 可调），L1 不留。侧栏 Whalebuddy 图标上有未读点，30 秒轮询一次；悬停是最近一条，点开面板用「知道了」清点。
 
 「待办」tab 用勾选管理 `tasks.json`（勾选即保存），「变更」tab 只读展示 `memory/changelog.md`。
 
@@ -73,7 +77,7 @@
 |---|---|
 | `fs:read` / `fs:write` | 读写信件目录下的 Markdown / JSON |
 | `system-prompt:write` | 注册一段开场记忆（`whalebuddy:memory`） |
-| `network:ingress` | 本机控制台的五条 HTTP 路由 |
+| `network:ingress` | 本机控制台的七条 HTTP 路由 |
 | `sessions:read` | 监听会话消息，供 `/collect` 提炼 |
 
 不发起网络请求、不调用 shell、不读凭据。记忆内容来自你的会话与手写文件，注入时会明确提醒模型「这是记忆，不是用户刚说的话」。

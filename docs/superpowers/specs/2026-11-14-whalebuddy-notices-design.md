@@ -1,7 +1,7 @@
 # 同事的「她来找你」· 第一版设计（门缝便签）
 
 - 日期：2026-11-14
-- 状态：**已批准**（2026-11-14，追加「L2 每日上限可调」）
+- 状态：**已实现**（2026-11-14；175 条测试通过，真实界面待重启验收）
 - 关联：[2026-11-09-whalebuddy-design.md](2026-11-09-whalebuddy-design.md) §6 主动性、[2026-11-14-whalebuddy-console-visual-design.md](2026-11-14-whalebuddy-console-visual-design.md)
 - 视觉探索：[presence.html](../../../designs/presence-hint/presence.html)（designs/ 不进仓库）
 
