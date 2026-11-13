@@ -151,10 +151,8 @@
     '.wb-chips{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}',
     '.wb-chip{display:inline-flex;align-items:center;height:24px;padding:0 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:999px;font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap}',
     '.wb-chipMono{font-family:var(--ds-font-family-code);font-size:10.5px}',
-    '.wb-row-unread{position:relative}',
-    '.wb-row-unread::after{content:"";position:absolute;top:50%;right:10px;width:5px;height:5px;margin-top:-2.5px;border-radius:50%;background:var(--wb-clay,#D97757)}',
+    '.wb-label-unread::after{content:"";display:inline-block;width:5px;height:5px;margin-left:7px;border-radius:50%;background:var(--wb-clay,#D97757);vertical-align:middle}',
     '.wb-iconDot{display:none}',
-    'svg[data-wb-unread="1"] .wb-iconDot{display:inline}',
     '.wb-tabs{flex:none;display:flex;gap:2px;margin-top:14px;padding:0 22px;border-bottom:1px solid var(--dsw-alias-border-l1);overflow-x:auto}',
     '.wb-tab{flex:none;height:38px;padding:0;margin-right:22px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--dsw-alias-label-tertiary);font-family:inherit;font-size:13px;cursor:pointer;white-space:nowrap}',
     '.wb-tab:hover:not(:disabled){color:var(--dsw-alias-label-primary)}',
@@ -372,38 +370,28 @@
    * @returns {{ start: () => void, stop: () => void, refresh: () => Promise<void>, apply: (payload: *) => void }}
    */
   /**
-   * The shell may draw the rail row from the package's `icon.svg` instead of
-   * the glyph component, so the dot must live on the row itself. Find the row
-   * by its label text and mark it; the stylesheet draws the dot.
+   * The dot belongs after the row's own label ("Whalebuddy ●"), not on the
+   * glyph and not at the row's far edge: find the deepest element whose text
+   * is exactly the label and let the stylesheet append the dot to it.
    * @param {Document} doc
    * @param {number} unread
    * @returns {void}
    */
   function paintRowBadge(doc, unread) {
     if (!doc || typeof doc.querySelectorAll !== 'function') return
-    var marked = doc.querySelectorAll('.wb-row-unread')
+    var marked = doc.querySelectorAll('.wb-label-unread')
     for (var index = 0; index < marked.length; index += 1) {
-      if (marked[index] && marked[index].classList) marked[index].classList.remove('wb-row-unread')
+      if (marked[index] && marked[index].classList) marked[index].classList.remove('wb-label-unread')
     }
     if (unread <= 0) return
 
     var hit = null
-    var candidates = doc.querySelectorAll('button,a,[role="button"],[role="menuitem"],[tabindex]')
-    for (var candidate = 0; candidate < candidates.length; candidate += 1) {
-      var text = candidates[candidate].textContent ? candidates[candidate].textContent.trim() : ''
-      if (text === 'Whalebuddy') {
-        hit = candidates[candidate]
-        break
-      }
+    var all = doc.querySelectorAll('*')
+    for (var node = 0; node < all.length; node += 1) {
+      var label = all[node].textContent ? all[node].textContent.trim() : ''
+      if (label === 'Whalebuddy') hit = all[node]
     }
-    if (hit === null) {
-      var all = doc.querySelectorAll('*')
-      for (var node = 0; node < all.length; node += 1) {
-        var label = all[node].textContent ? all[node].textContent.trim() : ''
-        if (label === 'Whalebuddy') hit = all[node]
-      }
-    }
-    if (hit !== null && hit.classList) hit.classList.add('wb-row-unread')
+    if (hit !== null && hit.classList) hit.classList.add('wb-label-unread')
   }
 
   function createNoticeWatcher(options) {

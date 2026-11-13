@@ -289,7 +289,7 @@ test('the watcher marks the real rail row when the glyph is not ours', async () 
       return null
     },
     querySelectorAll(selector) {
-      if (selector === '.wb-row-unread') return []
+      if (selector === '.wb-label-unread') return []
       if (selector === '*') return [row]
       return [row]
     },
@@ -305,7 +305,7 @@ test('the watcher marks the real rail row when the glyph is not ours', async () 
   mountPlugin({ fetch: fetchImpl, globals: { document: doc }, window: { setInterval: () => 1, clearInterval: () => {} } })
   await new Promise((resolve) => setImmediate(resolve))
 
-  assert.equal(row.classes.has('wb-row-unread'), true)
+  assert.equal(row.classes.has('wb-label-unread'), true)
 })
 
 test('the sidebar glyph polls notices and paints its own dot', async () => {
