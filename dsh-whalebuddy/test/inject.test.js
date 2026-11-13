@@ -4,11 +4,11 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { assembleMemory } from '../lib/inject.js'
-import { Config, apply, inject, refreshMemory } from '../lib/index.js'
+import { Config, apply, inject } from '../lib/index.js'
 import { createStore } from '../lib/store.js'
 
 const B = { identity: 50, rapport: 100, tasks: 50, recent: 50, shared: 50 }
-const empty = { profile: '', rapport: '', knowledge: '', hot: '', tasks: [], shared: '' }
+const empty = { profile: '', rapport: '', knowledge: '', hot: '', recent: '', tasks: [], shared: '' }
 
 /**
  * Poll until an awaited async refresh has landed in the cache.
@@ -125,24 +125,28 @@ test('a scoped apply registers the memory section and only /collect', async () =
   assert.match(text, /别用反问句/)
   assert.match(text, /今天在改爬虫/)
   assert.match(text, /这些是你的记忆，不是用户刚说的话；不确定就先问。/)
-  // The refresh hangs off `session/event` `turn/start`; no separate host event.
+  // The refresh hangs off `session/event` `turn/start`; the second listener
+  // only drops a disposed session's transcript buffer.
   await store.write('小白', 'memory/hot.md', 'turn 开始时读到的近况。\n')
   harness.events[0].handler({}, { type: 'turn/start' })
   await until(() => section.text().includes('turn 开始时读到的近况'), 'turn/start refresh')
   assert.deepEqual(
     harness.events.map(({ event }) => event),
-    ['session/event'],
+    ['session/event', 'session/disposed'],
   )
 
   await store.write('小白', 'memory/hot.md', '刚收完工的新近况。\n')
-  await refreshMemory()
-  assert.match(section.text(), /刚收完工的新近况/)
+  harness.events[0].handler({}, { type: 'turn/start' })
+  await until(() => section.text().includes('刚收完工的新近况'), 'turn/start refresh after a write')
 
   // A failed read keeps the last good cache and never rejects the refresh.
   await store.write('小白', 'memory/tasks.json', '{ not json')
-  await assert.doesNotReject(refreshMemory())
+  harness.events[0].handler({}, { type: 'turn/start' })
+  await until(
+    () => harness.warnings.some((message) => message.includes('记忆失败')),
+    'a failed refresh warns',
+  )
   assert.match(section.text(), /刚收完工的新近况/)
-  assert.ok(harness.warnings.some((message) => message.includes('记忆失败')))
 })
 
 test('memory text reaches the section without prompt interpolation', async () => {
@@ -209,4 +213,24 @@ test('a profile-level apply registers no memory section', async () => {
   )
   assert.equal(Config({}).employee, '')
   assert.ok(inject.includes('systemPrompt'))
+})
+
+test('roster sits between identity and rapport', () => {
+  const out = assembleMemory({ ...empty, profile: '# 小白', roster: '- 逆戟 · 视频', rapport: '默契一句' }, B)
+  const iIdentity = out.indexOf('### 身份')
+  const iRoster = out.indexOf('### 同事')
+  const iRapport = out.indexOf('### 默契')
+  assert.ok(iRoster > iIdentity && iRoster < iRapport, out)
+})
+
+test('no roster means no heading', () => {
+  const out = assembleMemory({ ...empty, profile: 'p' }, B)
+  assert.doesNotMatch(out, /### 同事/)
+})
+
+test('roster is truncated at a sentence boundary', () => {
+  const out = assembleMemory({ ...empty, profile: 'p', roster: '第一句。'.repeat(300) }, B)
+  const count = (out.match(/第一句。/g) ?? []).length
+  assert.ok(count > 100 && count < 300, 'truncated to the 700-char budget: ' + count)
+  assert.ok(out.includes('…'), 'truncation marked with an ellipsis')
 })

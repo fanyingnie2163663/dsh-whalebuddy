@@ -1,2 +1,7 @@
 node_modules/
 .superpowers/
+
+# 设计稿、参考料与本地工具：不进仓库
+references/
+designs/
+tools/

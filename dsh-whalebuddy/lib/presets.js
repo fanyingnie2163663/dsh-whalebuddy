@@ -110,7 +110,12 @@ export function buildPresetDefinition(employee, rows, dataDir) {
   const slug = employee.slug
   const name = typeof employee.name === 'string' && employee.name !== '' ? employee.name : slug
   const description = typeof employee.role === 'string' ? employee.role : ''
-  const templateRows = Array.isArray(rows) ? rows : []
+  // The template may already carry a colleague's Whalebuddy row when the
+  // current default preset is itself a colleague preset. Cloning it would load
+  // two memory sections in one session, so drop it here and append ours below.
+  const templateRows = (Array.isArray(rows) ? rows : []).filter(
+    (row) => row?.name !== OWN_PLUGIN_NAME && row?.id !== MEMORY_PLUGIN_ID,
+  )
   const root = typeof dataDir === 'string' && dataDir !== '' ? dataDir : undefined
 
   return {

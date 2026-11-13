@@ -13,6 +13,18 @@ test('preset carries the employee slug in its own row', () => {
   assert.equal(def.plugins[0].name, 'some-base-plugin')
 })
 
+test('a template row from another colleague never doubles the memory section', () => {
+  const rows = [
+    { id: 'base', name: 'some-base-plugin' },
+    { id: 'whalebuddy-memory', name: 'dsh-whalebuddy', config: { employee: '逆戟' } },
+  ]
+  const def = buildPresetDefinition(emp, rows)
+  const own = def.plugins.filter((row) => row.name === 'dsh-whalebuddy')
+  assert.equal(own.length, 1)
+  assert.deepEqual(own[0].config, { employee: '小白' })
+  assert.deepEqual(def.plugins.map((row) => row.name), ['some-base-plugin', 'dsh-whalebuddy'])
+})
+
 test('a custom data root rides along in the preset row', () => {
   const def = buildPresetDefinition(emp, [], 'D:/colleagues')
   const own = def.plugins.find(r => r.name === 'dsh-whalebuddy')

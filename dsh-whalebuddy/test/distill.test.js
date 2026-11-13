@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createQueue, mergeExtraction, ruleExtractor } from '../lib/distill.js'
 
-const prev = { hot: '', rapport: '', knowledge: '', tasks: [] }
+const prev = { hot: '', recent: '', rapport: '', knowledge: '', tasks: [] }
 
 test('promises become open tasks', () => {
   const out = mergeExtraction(prev, { promises: ['周五前把登录改完'] }, '2026-11-09')
@@ -21,15 +21,19 @@ test('facts land in knowledge', () => {
   assert.match(out.knowledge, /D:\/repo/)
 })
 
-test('hot memory keeps the newest 800 characters', () => {
-  const out = mergeExtraction({ ...prev, hot: '旧'.repeat(800) }, { report: '新'.repeat(100) }, '2026-11-09')
-  assert.ok(out.hot.length <= 800)
-  assert.ok(out.hot.includes('新'))
+test('recent memory keeps the newest 800 characters', () => {
+  const out = mergeExtraction({ ...prev, recent: '旧'.repeat(800) }, { report: '新'.repeat(100) }, '2026-11-09')
+  assert.ok(out.recent.length <= 800)
+  assert.ok(out.recent.includes('新'))
+  assert.match(out.recent, /- 2026-11-09 收工：/)
 })
 
 test('an empty extraction changes nothing', () => {
   const out = mergeExtraction(prev, {}, '2026-11-09')
-  assert.deepEqual({ hot: out.hot, rapport: out.rapport, knowledge: out.knowledge, tasks: out.tasks }, prev)
+  assert.deepEqual(
+    { hot: out.hot, recent: out.recent, rapport: out.rapport, knowledge: out.knowledge, tasks: out.tasks },
+    prev,
+  )
   assert.equal(out.logEntry, '')
 })
 
@@ -38,10 +42,34 @@ test('the report becomes a dated log entry', () => {
   assert.equal(out.logEntry, '## 2026-11-09\n- 改完登录并补了测试')
 })
 
+test('a multi-line report becomes one log line and one recent line', () => {
+  const out = mergeExtraction(prev, { report: '第一行\n\n第二段  有空格' }, '2026-11-09')
+  assert.equal(out.logEntry, '## 2026-11-09\n- 第一行 第二段 有空格')
+  assert.equal(out.recent, '- 2026-11-09 收工：第一行 第二段 有空格')
+  assert.ok(!out.recent.includes('\n'))
+})
+
+test('a report is capped so one collect cannot swallow recent memory', () => {
+  const out = mergeExtraction(prev, { report: '长'.repeat(500) }, '2026-11-09')
+  assert.ok(out.recent.length <= 800)
+  assert.ok(out.recent.startsWith('- 2026-11-09 收工：长'))
+  assert.match(out.logEntry, /^## 2026-11-09\n- 长+$/)
+})
+
 test('rule extractor pulls corrections and promises', () => {
   const x = ruleExtractor('以后别用反问句。答应我周五前改完登录。')
   assert.deepEqual(x.corrections, ['以后别用反问句'])
   assert.deepEqual(x.promises, ['答应我周五前改完登录'])
+})
+
+test('ordinary 别 words are not corrections', () => {
+  const x = ruleExtractor('别人都下班了。这个区别很大。特别喜欢你上次的配色。不要紧，明天再弄。分别处理这两件事。')
+  assert.deepEqual(x.corrections, [])
+})
+
+test('an imperative 别 is still a correction', () => {
+  const x = ruleExtractor('你别再手搓界面了。千万别手搓窗口。以后不用反问句。')
+  assert.deepEqual(x.corrections, ['你别再手搓界面了', '千万别手搓窗口', '以后不用反问句'])
 })
 
 test('the assistant echo is never a correction', () => {

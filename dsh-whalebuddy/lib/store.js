@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 /**
@@ -38,6 +38,7 @@ import { dirname, join } from 'node:path'
  * @property {(slug: string, rel: string, text: string) => Promise<void>} write
  * @property {(slug: string) => Promise<Task[]>} tasks
  * @property {(slug: string, tasks: Task[]) => Promise<void>} saveTasks
+ * @property {() => Promise<{ employees: EmployeeSummary[], changed: boolean }>} repair
  */
 
 /** Characters replaced by "-" when turning a name into a directory name. */
@@ -49,6 +50,34 @@ const DUPLICATE_SLUG_LIMIT = 50
 const FALLBACK_SLUG = 'colleague'
 const FALLBACK_TEMPERAMENT = '未定'
 const INDEX_FILE = 'index.json'
+
+/** Distinguishes the temp files of concurrent writers in this process. */
+let tempSequence = 0
+
+/**
+ * Serialize the index read-modify-write per data root. Every store instance in
+ * the process shares it, so two colleague creations cannot drop each other's
+ * entry.
+ * @type {Map<string, Promise<unknown>>}
+ */
+const indexTails = new Map()
+
+/**
+ * @template T
+ * @param {string} root
+ * @param {() => Promise<T>} task
+ * @returns {Promise<T>}
+ */
+function serializeIndex(root, task) {
+  const previous = indexTails.get(root) ?? Promise.resolve()
+  const run = previous.then(() => task())
+  const tail = run.catch(() => {})
+  indexTails.set(root, tail)
+  void tail.then(() => {
+    if (indexTails.get(root) === tail) indexTails.delete(root)
+  })
+  return run
+}
 
 /**
  * Turn a colleague name into a directory-safe slug.
@@ -68,7 +97,8 @@ export function slugify(name) {
 
 /**
  * Open the employee store rooted at `~/.dsh/whalebuddy` (or any directory).
- * Every mutation is atomic: write `<file>.tmp`, then rename it into place.
+ * Every mutation is atomic: write a private temp file beside the target, then
+ * rename it into place.
  * @param {string} root
  * @returns {Store}
  */
@@ -95,7 +125,9 @@ export function createStore(root) {
    */
   async function writeAtomic(file, text) {
     await mkdir(dirname(file), { recursive: true })
-    const temp = `${file}.tmp`
+    // A fixed `.tmp` name lets two writers collide; keep every attempt private.
+    tempSequence += 1
+    const temp = `${file}.${process.pid}.${tempSequence}.tmp`
     try {
       await writeFile(temp, text, 'utf8')
       await rename(temp, file)
@@ -150,6 +182,103 @@ export function createStore(root) {
   }
 
   /**
+   * Read the index without throwing: a missing or corrupt index is a cache miss,
+   * and `repair` rebuilds it from the directories.
+   * @returns {Promise<EmployeeSummary[]>}
+   */
+  async function readIndexSafely() {
+    try {
+      return await list()
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * Rebuild one summary from the files in its directory; `undefined` means the
+   * directory is not a colleague (neither profile.md nor state.json exists).
+   * @param {string} slug
+   * @returns {Promise<EmployeeSummary | undefined>}
+   */
+  async function summaryOf(slug) {
+    const dir = join(rootDir, slug)
+    const profile = await readTextIfExists(join(dir, 'profile.md'))
+    const state = await readTextIfExists(join(dir, 'state.json'))
+    if (profile === undefined && state === undefined) return undefined
+
+    const name = profile?.match(/^#[ \t]+(.+?)[ \t]*$/m)?.[1] ?? slug
+    const role = profile?.match(/^-[ \t]*岗位[:：][ \t]*(.*?)[ \t]*$/m)?.[1] ?? ''
+    let stateAutonomy = ''
+    if (state !== undefined) {
+      try {
+        const parsed = JSON.parse(state)
+        if (parsed?.autonomy === 'L1' || parsed?.autonomy === 'L2' || parsed?.autonomy === 'L3') {
+          stateAutonomy = parsed.autonomy
+        }
+      } catch {
+        // A corrupt state file falls back to the profile line.
+      }
+    }
+    const profileAutonomy = profile?.match(/^-[ \t]*档位[:：][ \t]*(L[123])/m)?.[1] ?? ''
+    const autonomy = stateAutonomy || profileAutonomy || 'L2'
+
+    let updatedAt = 0
+    for (const file of ['profile.md', 'state.json']) {
+      try {
+        updatedAt = Math.max(updatedAt, (await stat(join(dir, file))).mtimeMs)
+      } catch {
+        // A missing file contributes no timestamp.
+      }
+    }
+    return { slug, name, role, autonomy, updatedAt }
+  }
+
+  /**
+   * Reconcile `index.json` with the directories: the files are the truth and the
+   * index is only a cache (design §7.2/§7.9). A colleague directory copied in
+   * appears; an index row whose directory vanished is dropped; a corrupt index is
+   * rebuilt from the profile files. Returns the reconciled list.
+   * @returns {Promise<{ employees: EmployeeSummary[], changed: boolean }>}
+   */
+  async function repair() {
+    return serializeIndex(rootDir, async () => {
+      const indexed = await readIndexSafely()
+      const entries = await readdir(rootDir, { withFileTypes: true }).catch((error) => {
+        if (error?.code === 'ENOENT') return []
+        throw error
+      })
+
+      /** @type {Set<string>} */
+      const present = new Set()
+      /** @type {EmployeeSummary[]} */
+      const discovered = []
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        const slug = entry.name
+        if (slug.startsWith('.') || slug.startsWith('_')) continue
+        const summary = await summaryOf(slug)
+        if (summary === undefined) continue
+        present.add(slug)
+        if (indexed.some((employee) => employee?.slug === slug)) continue
+        discovered.push(summary)
+      }
+      discovered.sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+
+      /** @type {Set<string>} */
+      const seen = new Set()
+      const kept = indexed.filter((employee) => {
+        if (typeof employee?.slug !== 'string' || !present.has(employee.slug) || seen.has(employee.slug)) return false
+        seen.add(employee.slug)
+        return true
+      })
+      const employees = [...kept, ...discovered]
+      const changed = JSON.stringify(employees) !== JSON.stringify(indexed)
+      if (changed) await writeAtomic(join(rootDir, INDEX_FILE), `${JSON.stringify({ employees }, null, 2)}\n`)
+      return { employees, changed }
+    })
+  }
+
+  /**
    * @param {CreateEmployeeInput} input
    * @returns {Promise<EmployeeSummary>}
    */
@@ -182,9 +311,15 @@ export function createStore(root) {
     await writeAtomic(join(dir, 'state.json'), `${JSON.stringify(state, null, 2)}\n`)
 
     const summary = { slug, name, role, autonomy, updatedAt: Date.now() }
-    const employees = await list()
-    employees.push(summary)
-    await writeAtomic(join(rootDir, INDEX_FILE), `${JSON.stringify({ employees }, null, 2)}\n`)
+    await serializeIndex(rootDir, async () => {
+      const employees = await list()
+      // `repair` may have discovered this very directory while the create was in
+      // flight; replace that placeholder instead of listing the colleague twice.
+      const existing = employees.findIndex((employee) => employee?.slug === slug)
+      if (existing === -1) employees.push(summary)
+      else employees[existing] = summary
+      await writeAtomic(join(rootDir, INDEX_FILE), `${JSON.stringify({ employees }, null, 2)}\n`)
+    })
     return summary
   }
 
@@ -229,5 +364,5 @@ export function createStore(root) {
     await write(slug, 'memory/tasks.json', `${JSON.stringify(tasks, null, 2)}\n`)
   }
 
-  return { list, create, read, write, tasks, saveTasks }
+  return { list, create, read, write, tasks, saveTasks, repair }
 }

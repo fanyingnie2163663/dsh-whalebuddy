@@ -1,8 +1,10 @@
-import { appendFile } from 'node:fs/promises'
+import { appendFile, rename, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import Schema from 'schemastery'
+import { appendChange } from './changelog.js'
 import { createQueue, mergeExtraction, ruleExtractor } from './distill.js'
+import { createPanelRoutes, isConsoleRequestAllowed, ROUTES } from './host/routes.js'
 import { assembleMemory } from './inject.js'
 import { DEFAULT_NAMES } from './names.js'
 import { registerEmployeePresets, resolveTemplateRows } from './presets.js'
@@ -20,6 +22,7 @@ import { createStore } from './store.js'
 /**
  * @typedef {object} CommandInvocation
  * @property {string} [rawInput]
+ * @property {{ session?: { id?: string, header?: { id?: string } } }} [agent]
  */
 
 /**
@@ -57,10 +60,13 @@ const DATA_DIR_NAME = 'whalebuddy'
 const MEMORY_SECTION_NAME = 'whalebuddy:memory'
 /** Cut-in slot when the harness cannot order `HARNESS_IDENTITY`. */
 const FALLBACK_MEMORY_ORDER = 1000
+/** Keep `_startup.log` bounded; it is diagnostics, not history. */
+const STARTUP_LOG_LIMIT = 64 * 1024
 const HARNESS_IDENTITY_SECTION = 'HARNESS_IDENTITY'
 /** `_shared/` sits beside the employee directories, not inside one. */
 const SHARED_SLUG = '_shared'
 const SHARED_USER_FILE = 'user.md'
+const SHARED_ROSTER_FILE = 'roster.md'
 /** `/collect` exists only in a preset-scoped instance (ruling R9). */
 const COLLECT_COMMAND_NAME = 'collect'
 const COLLECT_COMMAND_DESCRIPTION = '收工：把这次会话里值得留下的写进记忆'
@@ -216,20 +222,6 @@ async function createEmployee(store, employeeName, options = {}) {
   return { kind: 'success', text: `已创建同事「${employeeName}」（${employee.slug}）。` }
 }
 
-/** @type {null | (() => Promise<string>)} */
-let memoryRefresher = null
-
-/**
- * Refresh the memory of the active preset-scoped instance. `/收工` calls this
- * after writing the distilled memory back, so the next assembly sees it. A
- * profile-level load has no scoped instance, so this is a no-op there.
- * @returns {Promise<string | undefined>}
- */
-export async function refreshMemory() {
-  if (memoryRefresher === null) return undefined
-  return memoryRefresher()
-}
-
 /**
  * Order the memory section right after the harness identity. Unknown names
  * throw (or return a non-number) in some builds, hence the guarded fallback.
@@ -270,15 +262,17 @@ async function readMemoryText(store, slug, rel) {
  * @returns {Promise<MemoryFiles>}
  */
 async function readMemoryFiles(store, employee) {
-  const [profile, rapport, knowledge, hot, tasks, shared] = await Promise.all([
+  const [profile, rapport, knowledge, hot, recent, tasks, shared, roster] = await Promise.all([
     readMemoryText(store, employee, 'profile.md'),
     readMemoryText(store, employee, 'memory/rapport.md'),
     readMemoryText(store, employee, 'memory/knowledge.md'),
     readMemoryText(store, employee, 'memory/hot.md'),
+    readMemoryText(store, employee, 'memory/recent.md'),
     store.tasks(employee),
     readMemoryText(store, SHARED_SLUG, SHARED_USER_FILE),
+    readMemoryText(store, SHARED_SLUG, SHARED_ROSTER_FILE),
   ])
-  return { profile, rapport, knowledge, hot, tasks, shared }
+  return { profile, rapport, knowledge, hot, recent, tasks, shared, roster }
 }
 
 /**
@@ -340,6 +334,26 @@ function countNewMemories(extraction) {
 }
 
 /**
+ * One-line changelog summary of what a `/collect` changed.
+ * @param {Extraction} extraction
+ * @returns {string}
+ */
+function describeExtraction(extraction) {
+  const parts = []
+  if (Array.isArray(extraction.corrections) && extraction.corrections.length > 0) {
+    parts.push(`纠错 +${extraction.corrections.length}`)
+  }
+  if (Array.isArray(extraction.promises) && extraction.promises.length > 0) {
+    parts.push(`待办 +${extraction.promises.length}`)
+  }
+  if (Array.isArray(extraction.facts) && extraction.facts.length > 0) {
+    parts.push(`知识 +${extraction.facts.length}`)
+  }
+  if (typeof extraction.report === 'string' && extraction.report.trim() !== '') parts.push('日志 +1')
+  return parts.join('、')
+}
+
+/**
  * Append one log entry to `memory/log/<date>.md`, keeping a blank line
  * between entries.
  * @param {Store} store
@@ -364,7 +378,7 @@ async function appendLog(store, employee, date, entry) {
  * @property {Store} store
  * @property {string} employee
  * @property {{ push(slug: string, task: () => Promise<void>): Promise<void> }} queue
- * @property {TranscriptBlock[]} transcript
+ * @property {TranscriptBlock[] | string | ((invocation?: CommandInvocation) => TranscriptBlock[])} transcript
  * @property {() => Promise<string>} refresh
  */
 
@@ -376,26 +390,27 @@ async function appendLog(store, employee, date, entry) {
  * so the report is the newest assistant message and only the user's turns can
  * yield corrections/promises, even when the 8000-character tail cap cuts the
  * transcript. A plain string has no roles, so it reaches the extractor without
- * the record and keeps the legacy whole-text fallback. The buffer is cleared
- * only after a successful write, so a failure can be retried.
+ * the record and keeps the legacy whole-text fallback. A function is resolved
+ * per invocation, so a session collects only the messages it buffered. The
+ * buffer is cleared only after a successful write, so a failure can be retried.
  * @param {CollectCommandOptions} options
- * @returns {{ name: string, description: string, handler: () => Promise<CommandResult> }}
+ * @returns {{ name: string, description: string, handler: (invocation?: CommandInvocation) => Promise<CommandResult> }}
  */
 export function createCollectCommand({ store, employee, queue, transcript, refresh }) {
-  // Compatibility: a caller may still pass one plain string. It counts as a
-  // single assistant block for the join/clear bookkeeping; the documented input
-  // type stays TranscriptBlock[]. The extractor is handed no record in that case
-  // because a string carries no roles (see above).
-  /** @type {TranscriptBlock[] | string} */
-  const input = transcript
-  const isStringInput = typeof input === 'string'
-  /** @type {TranscriptBlock[]} */
-  const blocks = isStringInput ? [{ role: 'assistant', text: input }] : input
+  // Compatibility: a caller may still pass one plain string or one array. A
+  // function is resolved per invocation; a string has no roles and keeps the
+  // legacy whole-text fallback.
+  const source = transcript
 
   return {
     name: COLLECT_COMMAND_NAME,
     description: COLLECT_COMMAND_DESCRIPTION,
-    async handler() {
+    async handler(invocation) {
+      /** @type {TranscriptBlock[] | string} */
+      const input = typeof source === 'function' ? source(invocation) : source
+      const isStringInput = typeof input === 'string'
+      /** @type {TranscriptBlock[]} */
+      const blocks = isStringInput ? [{ role: 'assistant', text: input }] : input
       const joined = blocks.map((block) => block.text).join('\n\n').trim()
       const text = joined.slice(-TRANSCRIPT_LIMIT)
       if (text === '') return { kind: 'error', text: COLLECT_EMPTY }
@@ -403,20 +418,22 @@ export function createCollectCommand({ store, employee, queue, transcript, refre
       const extraction = ruleExtractor(text, isStringInput ? undefined : blocks)
       try {
         await queue.push(employee, async () => {
-          const [hot, rapport, knowledge, tasks] = await Promise.all([
-            readMemoryText(store, employee, 'memory/hot.md'),
+          const [recent, rapport, knowledge, tasks] = await Promise.all([
+            readMemoryText(store, employee, 'memory/recent.md'),
             readMemoryText(store, employee, 'memory/rapport.md'),
             readMemoryText(store, employee, 'memory/knowledge.md'),
             store.tasks(employee),
           ])
           const stamp = todayStamp()
-          const merged = mergeExtraction({ hot, rapport, knowledge, tasks }, extraction, stamp)
+          const merged = mergeExtraction({ recent, rapport, knowledge, tasks }, extraction, stamp)
 
           await store.write(employee, 'memory/knowledge.md', merged.knowledge)
           await store.write(employee, 'memory/rapport.md', merged.rapport)
           await store.saveTasks(employee, merged.tasks)
-          await store.write(employee, 'memory/hot.md', merged.hot)
+          await store.write(employee, 'memory/recent.md', merged.recent)
           if (merged.logEntry !== '') await appendLog(store, employee, stamp, merged.logEntry)
+          const summary = describeExtraction(extraction)
+          if (summary !== '') await appendChange(store, employee, '收工', summary)
           await refresh()
         })
       } catch (error) {
@@ -466,32 +483,56 @@ async function applyScoped(ctx, config, employee) {
     }
   }
 
-  memoryRefresher = refresh
-  if (typeof ctx.effect === 'function') {
-    ctx.effect(() => () => {
-      if (memoryRefresher === refresh) memoryRefresher = null
-    })
-  }
-
   /**
-   * Role-tagged text of real messages; `/collect` joins and clears it. The
-   * same listener refreshes the cache at every turn start, so a new turn sees
-   * what `/collect` wrote in the previous one.
-   * @type {TranscriptBlock[]}
+   * One role-tagged buffer per session: `session/event` is a process-wide
+   * broadcast, so a colleague with two sessions open must not let one session's
+   * words into the other's memory. `/collect` resolves its own buffer through
+   * `invocation.agent.session`. The same listener refreshes the cache at every
+   * turn start, so a new turn sees what `/collect` wrote in the previous one.
+   * @type {Map<string, TranscriptBlock[]>}
    */
-  const transcript = []
+  const transcripts = new Map()
+  /**
+   * @param {*} session
+   * @returns {string}
+   */
+  const sessionKey = (session) => {
+    const id = session?.header?.id ?? session?.id
+    return typeof id === 'string' ? id : ''
+  }
+  /**
+   * @param {string} key
+   * @returns {TranscriptBlock[]}
+   */
+  const transcriptFor = (key) => {
+    let blocks = transcripts.get(key)
+    if (blocks === undefined) {
+      blocks = []
+      transcripts.set(key, blocks)
+    }
+    return blocks
+  }
   if (typeof ctx.on === 'function') {
     try {
       ctx.on('session/event', (session, event) => {
-        recordTranscript(transcript, event)
+        recordTranscript(transcriptFor(sessionKey(session)), event)
         if (event?.type === 'turn/start') void refresh()
+      })
+      ctx.on('session/disposed', (session) => {
+        transcripts.delete(sessionKey(session))
       })
     } catch (error) {
       warn(ctx, `监听 session/event 失败：${describeError(error)}`)
     }
   }
 
-  const command = createCollectCommand({ store, employee, queue: collectQueue, transcript, refresh })
+  const command = createCollectCommand({
+    store,
+    employee,
+    queue: collectQueue,
+    transcript: (invocation) => transcriptFor(sessionKey(invocation?.agent?.session)),
+    refresh,
+  })
   if (typeof ctx.effect === 'function' && typeof ctx.commands?.register === 'function') {
     ctx.effect(() => ctx.commands.register(command))
   } else {
@@ -570,7 +611,13 @@ export async function apply(ctx, config) {
       const pairs = Object.entries(fields)
         .filter(([, value]) => value !== undefined)
         .map(([key, value]) => `${key}=${String(value)}`)
-      await appendFile(join(root, '_startup.log'), `${new Date().toISOString()} ${pairs.join(' ')}\n`, 'utf8')
+      const file = join(root, '_startup.log')
+      try {
+        if ((await stat(file)).size > STARTUP_LOG_LIMIT) await rename(file, `${file}.1`)
+      } catch {
+        // A missing log (or a concurrent rotation) simply appends below.
+      }
+      await appendFile(file, `${new Date().toISOString()} ${pairs.join(' ')}\n`, 'utf8')
     } catch {
       // diagnostics must never break the plugin
     }
@@ -672,6 +719,61 @@ export async function apply(ctx, config) {
     await registerLoaded()
   }
 
+  /**
+   * Mount the console routes on the harness web server. The web server is
+   * optional (a CLI session has none), so this goes through `ctx.inject` and
+   * never blocks the plugin load; the `scope.effect` makes unload dispose the
+   * registrations in reverse order.
+   * @returns {void}
+   */
+  const mountConsole = () => {
+    if (typeof ctx.inject !== 'function') return
+    ctx.inject(['webServer'], (scope) => {
+      try {
+        // The web server can arrive before a Workspace service exists; resolve it
+        // per request so the panel degrades to an empty list instead of failing.
+        const workspaceRegistry = () => {
+          try {
+            return typeof ctx.get === 'function' ? ctx.get('workspaceRegistry') : undefined
+          } catch {
+            return undefined
+          }
+        }
+        const routes = createPanelRoutes({
+          store,
+          allow: (request) => isConsoleRequestAllowed(ctx, request),
+          onCreate: (created) => registerCreated(created),
+          logger: ctx.logger,
+          listWorkspaces: () => {
+            const registry = workspaceRegistry()
+            if (!registry || typeof registry.list !== 'function') return []
+            return registry.list().map((workspace) => ({
+              id: String(workspace.id),
+              path: String(workspace.path),
+              title: basename(String(workspace.path)),
+            }))
+          },
+          workspacePath: (id) => {
+            const registry = workspaceRegistry()
+            if (!registry || typeof registry.get !== 'function') return undefined
+            return registry.get(id)?.path
+          },
+        })
+        scope.effect(() => {
+          const releases = routes.map((route) => scope.webServer.register(route))
+          return () => {
+            for (const release of releases.splice(0)) release()
+          }
+        }, 'whalebuddy: console routes')
+        ctx.logger.info('whalebuddy console mounted (%s)', ROUTES.state)
+        void note({ event: 'console', routes: routes.length })
+      } catch (error) {
+        warn(ctx, `注册同事控制台失败：${describeError(error)}`)
+        void note({ event: 'console-failed', error: describeError(error) })
+      }
+    })
+  }
+
   // Bind synchronously when the service is already visible: the disposal
   // effect registers before the command effect, so unload disposes presets
   // in the same order as the previous releases.
@@ -688,6 +790,22 @@ export async function apply(ctx, config) {
     logger: ctx.logger,
   })
   ctx.effect(() => ctx.commands.register(command))
+  mountConsole()
+
+  // Directories are the truth and index.json is only a cache: reconcile once at
+  // load so a colleague directory copied in still gets its preset row.
+  try {
+    const repaired = await store.repair()
+    if (repaired.changed) {
+      void note({ event: 'repaired', employees: repaired.employees.length })
+      if (typeof ctx.logger?.info === 'function') {
+        ctx.logger.info('whalebuddy index rebuilt (%d colleagues)', repaired.employees.length)
+      }
+    }
+  } catch (error) {
+    warn(ctx, `修复同事索引失败：${describeError(error)}`)
+    void note({ event: 'repair-failed', error: describeError(error) })
+  }
 
   if (visibleNow) {
     await registerLoaded()

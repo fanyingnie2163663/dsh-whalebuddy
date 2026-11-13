@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, stat } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { slugify, createStore } from '../lib/store.js'
@@ -117,14 +117,23 @@ test('create refuses a name whose 50 candidates are taken', async () => {
   await assert.rejects(store.create(input()), /小白/)
 })
 
+test('concurrent creates keep every index entry', async () => {
+  const dir = await root()
+  const store = createStore(dir)
+  await Promise.all(Array.from({ length: 5 }, (_, index) => store.create(input({ name: `同事${index}` }))))
+  const employees = await store.list()
+  assert.equal(employees.length, 5)
+  assert.equal(new Set(employees.map((employee) => employee.slug)).size, 5)
+})
+
 test('write is atomic and read round-trips', async () => {
   const dir = await root()
   const store = createStore(dir)
   await store.create({ name: '蓝鲸', role: 'r', presetId: 'default', autonomy: 'L1', workspaces: [] })
   await store.write('蓝鲸', 'memory/hot.md', '# 热记忆\n')
   assert.equal(await store.read('蓝鲸', 'memory/hot.md'), '# 热记忆\n')
-  const tmp = join(dir, '蓝鲸', 'memory', 'hot.md.tmp')
-  await assert.rejects(stat(tmp))
+  const left = await readdir(join(dir, '蓝鲸', 'memory'))
+  assert.deepEqual(left.filter((name) => name.endsWith('.tmp')), [])
 })
 
 test('write creates missing parents and read misses cleanly', async () => {
@@ -157,6 +166,57 @@ test('a missing task file is an empty list and saving is pretty JSON', async () 
   const raw = await readFile(join(dir, '小白', 'memory', 'tasks.json'), 'utf8')
   assert.equal(raw, `${JSON.stringify(tasks, null, 2)}\n`)
   await assert.rejects(stat(join(dir, '小白', 'memory', 'tasks.json.tmp')))
+})
+
+test('repair rebuilds a missing index from the directories', async () => {
+  const dir = await root()
+  const store = createStore(dir)
+  await store.create(input({ name: '小白', role: '日常' }))
+  await store.create(input({ name: '逆戟', role: '视频', autonomy: 'L1' }))
+  await rm(join(dir, 'index.json'))
+
+  const out = await store.repair()
+  assert.equal(out.changed, true)
+  assert.deepEqual(out.employees.map((employee) => employee.name), ['小白', '逆戟'])
+  const orca = out.employees.find((employee) => employee.name === '逆戟')
+  assert.equal(orca.role, '视频')
+  assert.equal(orca.autonomy, 'L1')
+  assert.equal((await store.list()).length, 2)
+})
+
+test('repair rebuilds a corrupt index', async () => {
+  const dir = await root()
+  const store = createStore(dir)
+  await store.create(input({ name: '一角', role: '美术' }))
+  await writeFile(join(dir, 'index.json'), '{ not json', 'utf8')
+
+  const out = await store.repair()
+  assert.equal(out.changed, true)
+  assert.deepEqual(out.employees.map((employee) => employee.slug), ['一角'])
+  assert.equal((await store.list())[0].role, '美术')
+})
+
+test('repair drops an index row whose directory is gone', async () => {
+  const dir = await root()
+  const store = createStore(dir)
+  const first = await store.create(input({ name: '小白' }))
+  await store.create(input({ name: '逆戟' }))
+  await rm(join(dir, first.slug), { recursive: true, force: true })
+
+  const out = await store.repair()
+  assert.equal(out.changed, true)
+  assert.deepEqual(out.employees.map((employee) => employee.slug), ['逆戟'])
+  assert.deepEqual((await store.list()).map((employee) => employee.slug), ['逆戟'])
+})
+
+test('repair leaves a matching index untouched', async () => {
+  const dir = await root()
+  const store = createStore(dir)
+  await store.create(input())
+  const before = await readFile(join(dir, 'index.json'), 'utf8')
+  const out = await store.repair()
+  assert.equal(out.changed, false)
+  assert.equal(await readFile(join(dir, 'index.json'), 'utf8'), before)
 })
 
 test('create records the preset and autonomy snapshot', async () => {

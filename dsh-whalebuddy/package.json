@@ -2,7 +2,9 @@
   "name": "dsh-whalebuddy",
   "version": "0.1.0",
   "private": true,
-  "description": "同事：给 DeepSeek Harness 带来有档案、有默契、能延续的同事。",
+  "description": "Whalebuddy：给 DeepSeek Harness 带来有档案、有默契、能延续的同事。",
+  "license": "MIT",
+  "author": "聂凡瑛 <fanyingnie@gmail.com>",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -13,23 +15,49 @@
     "./package.json": "./package.json"
   },
   "icon": "./icon.svg",
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "colleague",
+    "memory"
+  ],
   "files": [
     "lib",
     "cordis.patch.yml",
     "locale/*.json",
-    "icon.svg"
+    "icon.svg",
+    "README.md"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=24.9.0",
+    "dsh": ">=0.2.2-0 <0.3.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.2.2-0 <0.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": {
+      "optional": true
+    }
   },
   "dsh": {
+    "manifestVersion": 1,
+    "kind": "plugin",
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
     "client": {
       "platform": "web",
       "inject": []
-    }
+    },
+    "capabilities": [
+      "fs:read",
+      "fs:write",
+      "network:ingress",
+      "sessions:read",
+      "system-prompt:write"
+    ],
+    "labels": []
   },
   "dependencies": {
     "schemastery": "^3.18.0",

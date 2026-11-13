@@ -17,6 +17,7 @@
 /**
  * @typedef {object} MemoryState
  * @property {string} hot
+ * @property {string} recent
  * @property {string} rapport
  * @property {string} knowledge
  * @property {Task[]} tasks
@@ -25,14 +26,15 @@
 /**
  * @typedef {object} MergedMemory
  * @property {string} hot
+ * @property {string} recent
  * @property {string} rapport
  * @property {string} knowledge
  * @property {Task[]} tasks
  * @property {string} logEntry
  */
 
-/** `hot.md` only ever keeps the newest 800 characters (design §7.2). */
-export const HOT_MEMORY_LIMIT = 800
+/** `recent.md` keeps the newest 800 characters of auto summaries (design §7.2). */
+export const RECENT_MEMORY_LIMIT = 800
 
 /** `ruleExtractor` keeps the first 200 characters of the final paragraph. */
 const REPORT_LIMIT = 200
@@ -40,8 +42,19 @@ const REPORT_LIMIT = 200
 /** The determinism contract: one sentence per `。！？` or newline. */
 const SENTENCE_BREAK = /[。！？\n]/
 
-/** A sentence with any of these is a correction (rapport, never compressed). */
-const CORRECTION_MARKERS = ['别', '不要', '以后']
+/**
+ * A correction is an imperative, not any sentence containing 别: 别人 / 特别 /
+ * 区别 are ordinary words, and a bare 以后 (“以后再说”) is not a correction.
+ * 别 counts when it is not the tail of a compound noun, so 千万别 / 你别 still
+ * match while 特别 / 分别 do not.
+ * @type {RegExp[]}
+ */
+const CORRECTION_PATTERNS = [
+  /(?<![特区级告分性个鉴辨识派离送惜类差永阔话])别(?!人|处|墅|致|样|扭)/u,
+  /不要(?!紧)/u,
+  /以后(?:别|不)/u,
+  /记住/u,
+]
 
 /** A sentence with any of these is a promise (an open task). */
 const PROMISE_MARKERS = ['答应', '记得', '帮我']
@@ -77,6 +90,17 @@ function textsOf(value) {
 }
 
 /**
+ * A report reaches `hot.md` and the day's log as one bullet, never a paragraph:
+ * a multi-line assistant reply would otherwise break the log's single `- ` line
+ * and let one collect evict a large slice of the 800-character hot memory.
+ * @param {unknown} value
+ * @returns {string}
+ */
+function reportText(value) {
+  return textOf(value).replace(/\s+/g, ' ').slice(0, REPORT_LIMIT)
+}
+
+/**
  * Append `- …` lines to a Markdown file. An empty body returns the previous
  * text untouched, so an extraction that yields nothing cannot rewrite a file.
  * @param {unknown} previous
@@ -92,16 +116,20 @@ function appendLines(previous, lines) {
 }
 
 /**
- * Append the report to hot memory and keep only the newest 800 characters.
+ * Append one dated 收工 summary to `recent.md` and keep the newest 800
+ * characters. Auto summaries live here, not in the hand-curated `hot.md`; the
+ * date + 收工 marker makes their provenance visible in every injection.
  * @param {unknown} previous
  * @param {string} report
+ * @param {string} stamp
  * @returns {string}
  */
-function mergeHot(previous, report) {
+function mergeRecent(previous, report, stamp) {
   const base = typeof previous === 'string' ? previous : ''
   if (report === '') return base
-  const joined = base.trim() === '' ? report : `${base.trimEnd()}\n${report}`
-  return joined.length <= HOT_MEMORY_LIMIT ? joined : joined.slice(-HOT_MEMORY_LIMIT)
+  const line = stamp === '' ? `- 收工：${report}` : `- ${stamp} 收工：${report}`
+  const joined = base.trim() === '' ? line : `${base.trimEnd()}\n${line}`
+  return joined.length <= RECENT_MEMORY_LIMIT ? joined : joined.slice(-RECENT_MEMORY_LIMIT)
 }
 
 /**
@@ -123,7 +151,7 @@ function tasksOf(promises, now, offset) {
 
 /**
  * Merge one extraction into the existing memory. Only-appends: no previous
- * entry is removed or rewritten except through the 800-character hot cap.
+ * entry is removed or rewritten except through the 800-character recent cap.
  * @param {Partial<MemoryState>} [previous]
  * @param {Extraction | undefined} extraction
  * @param {string} now `YYYY-MM-DD`
@@ -134,14 +162,15 @@ export function mergeExtraction(previous = {}, extraction = {}, now = '') {
   const source = extraction ?? {}
   const stamp = typeof now === 'string' ? now : ''
 
-  const report = textOf(source.report)
+  const report = reportText(source.report)
   const corrections = textsOf(source.corrections)
   const promises = textsOf(source.promises)
   const facts = textsOf(source.facts)
   const priorTasks = Array.isArray(before.tasks) ? before.tasks : []
 
   return {
-    hot: mergeHot(before.hot, report),
+    hot: typeof before.hot === 'string' ? before.hot : '',
+    recent: mergeRecent(before.recent, report, stamp),
     rapport: appendLines(
       before.rapport,
       corrections.map((correction) => `- [${stamp}] ${CORRECTION_PREFIX}${correction}`),
@@ -229,7 +258,7 @@ export function ruleExtractor(transcript, blocks) {
   /** @type {string[]} */
   const promises = []
   for (const sentence of sentences) {
-    if (CORRECTION_MARKERS.some((marker) => sentence.includes(marker))) corrections.push(sentence)
+    if (CORRECTION_PATTERNS.some((pattern) => pattern.test(sentence))) corrections.push(sentence)
     if (PROMISE_MARKERS.some((marker) => sentence.includes(marker))) promises.push(sentence)
   }
 

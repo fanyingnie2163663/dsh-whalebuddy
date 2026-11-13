@@ -154,6 +154,42 @@ test('two collects on one day keep a single date header', async () => {
   assert.equal(log.match(/^## /gm).length, 1)
 })
 
+test('/collect only reads the session that invoked it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-collect-sessions-'))
+  await createStore(root).create(employee('小白'))
+  const harness = createScopedHarness()
+  await apply(harness.ctx, { dataDir: root, employee: '小白' })
+
+  const listener = harness.listeners.find((entry) => entry.event === 'session/event')
+  const emit = (session, type, text) => {
+    const block = { type: 'text', text }
+    const data = type === 'assistant/message' ? { message: { content: [block] } } : { content: [block] }
+    listener.handler(session, { type, data })
+  }
+
+  const sessionA = { header: { id: 'session-a' } }
+  const sessionB = { header: { id: 'session-b' } }
+  emit(sessionB, 'user/message', '以后别用反问句。')
+  emit(sessionA, 'assistant/message', '登录改完了。')
+  emit(sessionB, 'assistant/message', '另一边的总结。')
+
+  const invocation = { agent: { session: sessionA } }
+  const result = await harness.commands[0].handler(invocation)
+  assert.equal(result.kind, 'success')
+
+  const store = createStore(root)
+  const stamp = today()
+  const log = await store.read('小白', `memory/log/${stamp}.md`)
+  assert.match(log, /登录改完了/)
+  assert.doesNotMatch(log, /另一边的总结/)
+  assert.doesNotMatch(log, /反问句/)
+  assert.equal(await store.read('小白', 'memory/rapport.md'), '')
+
+  // Session A's buffer was cleared; session B's words never reached it.
+  const second = await harness.commands[0].handler(invocation)
+  assert.deepEqual(second, { kind: 'error', text: EMPTY_TRANSCRIPT })
+})
+
 test('createCollectCommand tolerates a plain string transcript', async () => {  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-collect-string-'))
   const store = createStore(root)
   await store.create(employee('小白'))
@@ -200,7 +236,9 @@ test('/collect writes the distilled memory and refreshes only its own instance',
 
   const stamp = today()
   assert.match(await storeA.read('小白', 'memory/rapport.md'), new RegExp(`\\[${stamp}\\] 纠错：以后别用反问句`))
-  assert.match(await storeA.read('小白', 'memory/hot.md'), /登录改完了/)
+  assert.equal(await storeA.read('小白', 'memory/hot.md'), undefined)
+  assert.match(await storeA.read('小白', 'memory/recent.md'), /登录改完了/)
+  assert.match(await storeA.read('小白', 'memory/changelog.md'), /收工：纠错 \+1、日志 \+1/)
   assert.match(await storeA.read('小白', `memory/log/${stamp}.md`), new RegExp(`## ${stamp}\\n- 登录改完了`))
   assert.deepEqual(JSON.parse(await storeA.read('小白', 'memory/tasks.json')), [])
   assert.equal(await storeA.read('小白', 'memory/knowledge.md'), '')
@@ -233,9 +271,9 @@ test('/collect keeps the newest tail of a long transcript', async () => {
   const log = await store.read('小白', `memory/log/${stamp}.md`)
   assert.match(log, /最新一段总结：把登录改完。/)
   assert.doesNotMatch(log, /早先的总结/)
-  const hot = await store.read('小白', 'memory/hot.md')
-  assert.match(hot, /最新一段总结：把登录改完。/)
-  assert.doesNotMatch(hot, /早先的总结/)
+  const recent = await store.read('小白', 'memory/recent.md')
+  assert.match(recent, /最新一段总结：把登录改完。/)
+  assert.doesNotMatch(recent, /早先的总结/)
   assert.match(await store.read('小白', 'memory/rapport.md'), /以后别用反问句/)
   const tasks = JSON.parse(await store.read('小白', 'memory/tasks.json'))
   assert.deepEqual(tasks.map((task) => task.text), ['记得周五前写完测试'])

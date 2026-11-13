@@ -10,8 +10,10 @@
  * @property {string} rapport
  * @property {string} knowledge
  * @property {string} hot
+ * @property {string} recent
  * @property {Task[]} tasks
  * @property {string} shared
+ * @property {string} roster
  *
  * @typedef {object} MemoryBudget
  * @property {number} identity
@@ -19,6 +21,7 @@
  * @property {number} tasks
  * @property {number} recent
  * @property {number} shared
+ * @property {number} roster
  */
 
 /** Design §7.4 defaults, in characters (one token is roughly two CJK chars). */
@@ -28,6 +31,7 @@ export const DEFAULT_MEMORY_BUDGET = Object.freeze({
   tasks: 200,
   recent: 300,
   shared: 150,
+  roster: 700,
 })
 
 /** Reminds the model that injected text is memory, not the current user turn. */
@@ -105,8 +109,9 @@ function openTaskLines(tasks) {
 
 /**
  * Assemble the injected memory: 身份 → 默契 → 待办 → 近况 → 关于你.
- * The recent section is `hot` (the newest memory, written by `/收工`) followed
- * by `knowledge`; P1a injects every knowledge line, with no workspace filter.
+ * The recent section is `hot` (hand-curated), then `recent` (dated /collect
+ * summaries, so their provenance stays visible), then `knowledge`; P1a injects
+ * every knowledge line, with no workspace filter.
  * @param {Partial<MemoryFiles>} [files]
  * @param {Partial<MemoryBudget>} [budget]
  * @returns {string}
@@ -119,15 +124,17 @@ export function assembleMemory(files = {}, budget = DEFAULT_MEMORY_BUDGET) {
     tasks: limitOf(budget?.tasks, DEFAULT_MEMORY_BUDGET.tasks),
     recent: limitOf(budget?.recent, DEFAULT_MEMORY_BUDGET.recent),
     shared: limitOf(budget?.shared, DEFAULT_MEMORY_BUDGET.shared),
+    roster: limitOf(budget?.roster, DEFAULT_MEMORY_BUDGET.roster),
   }
 
-  const recent = [source.hot, source.knowledge]
+  const recent = [source.hot, source.recent, source.knowledge]
     .map((part) => (typeof part === 'string' ? part.trim() : ''))
     .filter((part) => part !== '')
     .join('\n')
 
   const sections = [
     renderSection('身份', truncateToBudget(source.profile, limits.identity)),
+    renderSection('同事', truncateToBudget(source.roster, limits.roster)),
     renderSection('默契', truncateToBudget(source.rapport, limits.rapport)),
     renderSection('待办', truncateToBudget(openTaskLines(source.tasks), limits.tasks)),
     renderSection('近况', truncateToBudget(recent, limits.recent)),
