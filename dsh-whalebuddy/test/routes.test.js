@@ -343,6 +343,92 @@ test('update rejects the wrong method with 405', async () => {
   }
 })
 
+
+test('notices aggregates unread and leaves L1 out', async () => {
+  const { store, slug } = await seed()
+  await store.write(slug, 'memory/notices.json', JSON.stringify([{ id: 'n1', at: 1, kind: 'collect', text: '一句', detail: '' }]))
+  const l1 = await store.create({ name: '小白', role: '', presetId: '', autonomy: 'L1', workspaces: [] })
+  await store.write(l1.slug, 'memory/notices.json', JSON.stringify([{ id: 'n2', at: 2, kind: 'collect', text: '别计', detail: '' }]))
+  const server = await mount(createPanelRoutes({ store }))
+  try {
+    const answer = await call(server.base, ROUTES.notices)
+    assert.equal(answer.status, 200)
+    assert.equal(answer.body.unread, 1)
+    assert.equal(answer.body.latest.slug, slug)
+    assert.equal(answer.body.bySlug[l1.slug], undefined)
+  } finally {
+    await server.close()
+  }
+})
+
+test('notices/read marks one or all and answers with the new aggregate', async () => {
+  const { store, slug } = await seed()
+  await store.write(slug, 'memory/notices.json', JSON.stringify([
+    { id: 'a', at: 1, kind: 'collect', text: '一', detail: '' },
+    { id: 'b', at: 2, kind: 'collect', text: '二', detail: '' },
+  ]))
+  const server = await mount(createPanelRoutes({ store }))
+  try {
+    const one = await call(server.base, ROUTES.noticesRead, { method: 'POST', body: { slug, id: 'a' } })
+    assert.equal(one.status, 200)
+    assert.equal(one.body.unread, 1)
+
+    const all = await call(server.base, ROUTES.noticesRead, { method: 'POST', body: { slug } })
+    assert.equal(all.status, 200)
+    assert.equal(all.body.unread, 0)
+
+    const raw = JSON.parse((await store.read(slug, 'memory/notices.json')) ?? '[]')
+    assert.ok(raw.every((notice) => typeof notice.readAt === 'number'))
+  } finally {
+    await server.close()
+  }
+})
+
+test('notices/read refuses a colleague that does not exist with 404', async () => {
+  const { store } = await seed()
+  const server = await mount(createPanelRoutes({ store }))
+  try {
+    const answer = await call(server.base, ROUTES.noticesRead, { method: 'POST', body: { slug: 'ghost' } })
+    assert.equal(answer.status, 404)
+  } finally {
+    await server.close()
+  }
+})
+
+test('notices/read rejects the wrong method with 405', async () => {
+  const { store } = await seed()
+  const server = await mount(createPanelRoutes({ store }))
+  try {
+    const answer = await call(server.base, ROUTES.noticesRead)
+    assert.equal(answer.status, 405)
+  } finally {
+    await server.close()
+  }
+})
+
+test('update also accepts a noticeCap alone or beside an autonomy', async () => {
+  const { store, slug } = await seed()
+  const server = await mount(createPanelRoutes({ store }))
+  try {
+    const cap = await call(server.base, ROUTES.update, { method: 'POST', body: { slug, noticeCap: 5 } })
+    assert.equal(cap.status, 200)
+    assert.equal(cap.body.colleague.noticeCap, 5)
+
+    const bad = await call(server.base, ROUTES.update, { method: 'POST', body: { slug, noticeCap: 6 } })
+    assert.equal(bad.status, 400)
+
+    const none = await call(server.base, ROUTES.update, { method: 'POST', body: { slug } })
+    assert.equal(none.status, 400)
+
+    const both = await call(server.base, ROUTES.update, { method: 'POST', body: { slug, autonomy: 'L1', noticeCap: 1 } })
+    assert.equal(both.status, 200)
+    assert.equal(both.body.updated.autonomy, 'L1')
+    assert.equal(both.body.colleague.noticeCap, 1)
+  } finally {
+    await server.close()
+  }
+})
+
 test('a refusing fence answers 403 before the handler runs', async () => {
   const { store } = await seed()
   const server = await mount(createPanelRoutes({ store, allow: () => false }))

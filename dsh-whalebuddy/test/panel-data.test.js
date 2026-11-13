@@ -4,7 +4,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createStore } from '../lib/store.js'
-import { bindWorkspace, buildPreview, changeAutonomy, isWritable, readColleague, readPanelState, saveFile } from '../lib/host/panel-data.js'
+import { bindWorkspace, buildPreview, changeAutonomy, changeNoticeCap, isWritable, readColleague, readPanelState, saveFile } from '../lib/host/panel-data.js'
 
 async function seed() {
   const root = await mkdtemp(join(tmpdir(), 'whalebuddy-panel-'))
@@ -122,6 +122,27 @@ test('saving a profile whose autonomy line changed updates the snapshot and the 
   const state = JSON.parse((await store.read(slug, 'state.json')) ?? '{}')
   assert.equal(state.autonomy, 'L1')
   assert.match(out.preview, /档位：L1/)
+})
+
+
+test('readColleague carries notices and the daily cap', async () => {
+  const { store, slug } = await seed()
+  await store.write(slug, 'memory/notices.json', JSON.stringify([{ id: 'n1', at: 1, kind: 'collect', text: '改完了。', detail: '' }]))
+
+  const one = await readColleague(store, slug)
+  assert.equal(one.notices.length, 1)
+  assert.equal(one.notices[0].text, '改完了。')
+  assert.equal(one.noticeCap, 2)
+})
+
+test('changeNoticeCap writes the cap and records it', async () => {
+  const { store, slug } = await seed()
+
+  const out = await changeNoticeCap(store, slug, 3)
+
+  assert.equal(out.colleague.noticeCap, 3)
+  assert.match((await store.read(slug, 'state.json')) ?? '', /"noticeCap": 3/)
+  assert.match((await store.read(slug, 'memory/changelog.md')) ?? '', /上限 → 3/)
 })
 
 test('changing autonomy refuses a level it does not know', async () => {

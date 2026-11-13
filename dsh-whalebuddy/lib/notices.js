@@ -28,7 +28,7 @@ export const NOTICE_CAP_MAX = 5
 
 /**
  * @param {unknown} value
- * @returns {boolean}
+ * @returns {value is number}
  */
 export function isNoticeCap(value) {
   return (

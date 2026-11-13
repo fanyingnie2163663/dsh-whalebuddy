@@ -9,6 +9,7 @@
  */
 import { appendChange } from '../changelog.js'
 import { assembleMemory } from '../inject.js'
+import { NOTICE_FILE, aggregateNotices, markRead, noticeCapFromState, parseNotices } from '../notices.js'
 
 /**
  * The only files the console may write. Anything else is refused, so a bug in
@@ -96,11 +97,11 @@ export function buildPreview(files, tasks = []) {
  * One colleague's editable files plus the preview they produce.
  * @param {import('../store.js').Store} store
  * @param {string} slug
- * @returns {Promise<{slug: string, files: Record<string, string>, bound: string[], preview: string}>}
+ * @returns {Promise<{slug: string, files: Record<string, string>, bound: string[], preview: string, notices: import('../notices.js').Notice[], noticeCap: number}>}
  */
 export async function readColleague(store, slug) {
   const read = async (rel) => (await store.read(slug, rel)) ?? ''
-  const [profile, hot, recent, rapport, knowledge, roster, shared, changelog, tasksText] = await Promise.all([
+  const [profile, hot, recent, rapport, knowledge, roster, shared, changelog, tasksText, stateText, noticesText] = await Promise.all([
     read('profile.md'),
     read('memory/hot.md'),
     read('memory/recent.md'),
@@ -110,6 +111,8 @@ export async function readColleague(store, slug) {
     (async () => (await store.read(SHARED_SLUG, USER_FILE)) ?? '')(),
     read('memory/changelog.md'),
     read('memory/tasks.json'),
+    read('state.json'),
+    read(NOTICE_FILE),
   ])
   const tasks = await store.tasks(slug).catch(() => [])
   const files = {
@@ -123,7 +126,63 @@ export async function readColleague(store, slug) {
     changelog: changelog.slice(-CHANGELOG_VIEW_LIMIT),
     tasks: tasksText,
   }
-  return { slug, files, bound: boundWorkspaces(profile), preview: buildPreview(files, tasks) }
+  return {
+    slug,
+    files,
+    bound: boundWorkspaces(profile),
+    preview: buildPreview(files, tasks),
+    notices: parseNotices(noticesText),
+    noticeCap: noticeCapFromState(stateText),
+  }
+}
+
+/**
+ * Change one colleague's daily notice cap and record it.
+ * @param {import('../store.js').Store} store
+ * @param {string} slug
+ * @param {number} cap
+ * @returns {Promise<Awaited<ReturnType<typeof readPanelState>>>}
+ */
+export async function changeNoticeCap(store, slug, cap) {
+  await store.setNoticeCap(slug, cap)
+  await appendChange(store, slug, '控制台', `上限 → ${cap} 条/天`)
+  return readPanelState(store, slug)
+}
+
+/**
+ * Every colleague's unread roll-up for the sidebar row; L1 colleagues are left
+ * out by `aggregateNotices`.
+ * @param {import('../store.js').Store} store
+ * @returns {Promise<ReturnType<typeof aggregateNotices>>}
+ */
+export async function readNoticeSummary(store) {
+  const employees = await store.list()
+  const entries = []
+  for (const employee of employees) {
+    const raw = await store.read(employee.slug, NOTICE_FILE).catch(() => undefined)
+    entries.push({
+      slug: employee.slug,
+      name: employee.name,
+      autonomy: employee.autonomy,
+      notices: parseNotices(raw),
+    })
+  }
+  return aggregateNotices(entries)
+}
+
+/**
+ * Mark one notice (by id) or all of them read, then answer with the new roll-up.
+ * @param {import('../store.js').Store} store
+ * @param {string} slug
+ * @param {string | undefined} id
+ * @param {number} [at]
+ * @returns {Promise<ReturnType<typeof aggregateNotices>>}
+ */
+export async function markNoticesRead(store, slug, id, at = Date.now()) {
+  const raw = await store.read(slug, NOTICE_FILE)
+  const next = markRead(parseNotices(raw), id, at)
+  await store.write(slug, NOTICE_FILE, `${JSON.stringify(next, null, 2)}\n`)
+  return readNoticeSummary(store)
 }
 
 /**

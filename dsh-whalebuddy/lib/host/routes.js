@@ -12,13 +12,25 @@
  *
  * @module dsh-whalebuddy/host/routes
  */
-import { bindWorkspace, changeAutonomy, isWritable, readPanelState, saveFile } from './panel-data.js'
+import { isNoticeCap } from '../notices.js'
+import {
+  bindWorkspace,
+  changeAutonomy,
+  changeNoticeCap,
+  isWritable,
+  markNoticesRead,
+  readNoticeSummary,
+  readPanelState,
+  saveFile,
+} from './panel-data.js'
 
 /** Route paths, shared by the mount code and the tests. */
 export const ROUTES = Object.freeze({
   state: '/api/whalebuddy/state',
   save: '/api/whalebuddy/save',
   update: '/api/whalebuddy/update',
+  notices: '/api/whalebuddy/notices',
+  noticesRead: '/api/whalebuddy/notices/read',
   create: '/api/whalebuddy/create',
   assign: '/api/whalebuddy/assign',
 })
@@ -316,12 +328,22 @@ export function createPanelRoutes({ store, allow, onCreate, logger, listWorkspac
 
         const slug = textOf(body.slug)
         const autonomy = textOf(body.autonomy).toUpperCase()
+        const wantsAutonomy = autonomy !== ''
+        const wantsCap = body.noticeCap !== undefined
         if (slug === '') {
           writeJson(res, 400, { error: 'slug is required' })
           return
         }
-        if (autonomy !== 'L1' && autonomy !== 'L2' && autonomy !== 'L3') {
+        if (!wantsAutonomy && !wantsCap) {
+          writeJson(res, 400, { error: 'autonomy or noticeCap is required' })
+          return
+        }
+        if (wantsAutonomy && autonomy !== 'L1' && autonomy !== 'L2' && autonomy !== 'L3') {
           writeJson(res, 400, { error: 'autonomy must be L1, L2 or L3' })
+          return
+        }
+        if (wantsCap && !isNoticeCap(body.noticeCap)) {
+          writeJson(res, 400, { error: 'noticeCap must be an integer from 1 to 5' })
           return
         }
 
@@ -338,8 +360,60 @@ export function createPanelRoutes({ store, allow, onCreate, logger, listWorkspac
         }
 
         try {
-          const panel = await changeAutonomy(store, slug, autonomy)
+          /** @type {Record<string, unknown>} */
+          let panel = {}
+          if (wantsAutonomy) panel = { ...panel, ...(await changeAutonomy(store, slug, autonomy)) }
+          if (wantsCap) {
+            const cap = /** @type {number} */ (body.noticeCap)
+            panel = { ...panel, ...(await changeNoticeCap(store, slug, cap)) }
+          }
           writeJson(res, 200, { ...panel, workspaces: workspacesOf(listWorkspaces) })
+        } catch (error) {
+          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: ROUTES.notices,
+      async handler(req, res) {
+        if (!guard(permitted, req, res, 'GET')) return
+        try {
+          writeJson(res, 200, await readNoticeSummary(store))
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: ROUTES.noticesRead,
+      async handler(req, res) {
+        if (!guard(permitted, req, res, 'POST')) return
+        const body = await readJsonObject(req, res)
+        if (body === undefined) return
+
+        const slug = textOf(body.slug)
+        if (slug === '') {
+          writeJson(res, 400, { error: 'slug is required' })
+          return
+        }
+        const id = typeof body.id === 'string' && body.id !== '' ? body.id : undefined
+
+        let employees
+        try {
+          employees = await store.list()
+        } catch (error) {
+          fail(res, error)
+          return
+        }
+        if (!employees.some((employee) => employee.slug === slug)) {
+          writeJson(res, 404, { error: `no colleague named "${slug}"` })
+          return
+        }
+
+        try {
+          writeJson(res, 200, await markNoticesRead(store, slug, id))
         } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }
