@@ -153,12 +153,6 @@
     '.wb-chipMono{font-family:var(--ds-font-family-code);font-size:10.5px}',
     '.wb-label-unread::after{content:"";display:inline-block;width:5px;height:5px;margin-left:7px;border-radius:50%;background:var(--wb-clay,#D97757);vertical-align:middle}',
     '.wb-iconDot{display:none}',
-    '.wb-hover{position:fixed;z-index:2147483000;width:264px;box-sizing:border-box;padding:10px 12px;border:1px solid var(--dsw-alias-border-l1,#2a2f38);border-radius:10px;background:var(--dsw-alias-bg-base,#14171c);color:var(--dsw-alias-label-primary,#e8ebf0);font:12.5px/1.6 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 12px 32px rgba(0,0,0,.38)}',
-    '.wb-hoverHead{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-size:11px;color:var(--dsw-alias-label-tertiary,#7c8593)}',
-    '.wb-hoverHead b{font-size:11px;font-weight:600;letter-spacing:.08em;color:var(--dsw-alias-label-tertiary,#7c8593)}',
-    '.wb-hoverText{margin:6px 0 0;font-size:13px;line-height:1.55;word-break:break-word}',
-    '.wb-hoverMeta{margin:4px 0 0;font-size:11px;color:var(--dsw-alias-label-secondary,#a9b1bd)}',
-    '.wb-hoverFoot{margin:8px 0 0;font-size:11px;color:var(--dsw-alias-label-tertiary,#7c8593)}',
     '.wb-tabs{flex:none;display:flex;gap:2px;margin-top:14px;padding:0 22px;border-bottom:1px solid var(--dsw-alias-border-l1);overflow-x:auto}',
     '.wb-tab{flex:none;height:38px;padding:0;margin-right:22px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--dsw-alias-label-tertiary);font-family:inherit;font-size:13px;cursor:pointer;white-space:nowrap}',
     '.wb-tab:hover:not(:disabled){color:var(--dsw-alias-label-primary)}',
@@ -381,43 +375,23 @@
    * is exactly the label and let the stylesheet append the dot to it.
    * @param {Document} doc
    * @param {number} unread
-   * @returns {Element | null}
+   * @returns {void}
    */
   function paintRowBadge(doc, unread) {
-    if (!doc || typeof doc.querySelectorAll !== 'function') return null
+    if (!doc || typeof doc.querySelectorAll !== 'function') return
     var marked = doc.querySelectorAll('.wb-label-unread')
     for (var index = 0; index < marked.length; index += 1) {
       if (marked[index] && marked[index].classList) marked[index].classList.remove('wb-label-unread')
     }
+    if (unread <= 0) return
 
-    /** @type {Element | null} */
     var hit = null
     var all = doc.querySelectorAll('*')
     for (var node = 0; node < all.length; node += 1) {
       var label = all[node].textContent ? all[node].textContent.trim() : ''
       if (label === 'Whalebuddy') hit = all[node]
     }
-    if (hit !== null && unread > 0 && hit.classList) hit.classList.add('wb-label-unread')
-    return hit
-  }
-
-  /**
-   * The row container is the highest ancestor that still carries only the
-   * label text, so hovering the icon counts as hovering the row.
-   * @param {Element | null} label
-   * @returns {Element | null}
-   */
-  function rowOf(label) {
-    if (!label) return null
-    var row = label
-    var node = label
-    while (node && node.parentElement) {
-      var parent = node.parentElement
-      if (!parent.textContent || parent.textContent.trim() !== 'Whalebuddy') break
-      row = parent
-      node = parent
-    }
-    return row
+    if (hit !== null && hit.classList) hit.classList.add('wb-label-unread')
   }
 
   function createNoticeWatcher(options) {
@@ -427,100 +401,6 @@
     var intervalMs = options.intervalMs || 30000
     var timer = null
     var started = false
-    var lastPayload = null
-    /** @type {any} */
-    var rowEl = null
-    /** @type {any} */
-    var cardEl = null
-
-    /**
-     * @param {*} parent
-     * @param {*} child
-     * @returns {boolean}
-     */
-    function contains(parent, child) {
-      if (!parent || !child) return false
-      if (parent === child) return true
-      return typeof parent.contains === 'function' ? parent.contains(child) : false
-    }
-
-    /** @returns {void} */
-    function hideCard() {
-      if (cardEl === null) return
-      var parent = cardEl.parentNode
-      if (parent && typeof parent.removeChild === 'function') parent.removeChild(cardEl)
-      cardEl = null
-    }
-
-    /**
-     * @param {string} tag
-     * @param {string} className
-     * @param {string} [text]
-     * @returns {*}
-     */
-    function make(tag, className, text) {
-      var node = doc.createElement(tag)
-      if (className !== '') node.className = className
-      if (text !== undefined) node.textContent = text
-      return node
-    }
-
-    /** @returns {void} */
-    function showCard() {
-      if (!doc || typeof doc.createElement !== 'function' || !doc.body || rowEl === null) return
-      hideCard()
-      var payload = lastPayload || {}
-      var latest = payload.latest || null
-      var unread = typeof payload.unread === 'number' ? payload.unread : 0
-
-      var card = make('div', 'wb-hover')
-      card.setAttribute('role', 'tooltip')
-      var head = make('div', 'wb-hoverHead')
-      head.appendChild(make('b', '', '她的话'))
-      head.appendChild(make('span', '', latest ? clockOf(latest.at) : ''))
-      card.appendChild(head)
-
-      card.appendChild(make('p', 'wb-hoverText', latest ? latest.name + '：' + latest.text : '现在没有未读。'))
-      var meta = unread > 0 ? unread + ' 条未读' : '收工后她会留一句'
-      card.appendChild(make('p', 'wb-hoverMeta', meta))
-      card.appendChild(make('p', 'wb-hoverFoot', '点一下打开 Whalebuddy'))
-      card.addEventListener('mouseleave', hideCard)
-      card.addEventListener('click', function () {
-        if (rowEl && typeof rowEl.click === 'function') rowEl.click()
-      })
-
-      doc.body.appendChild(card)
-      cardEl = card
-
-      if (typeof rowEl.getBoundingClientRect === 'function' && typeof card.getBoundingClientRect === 'function') {
-        var row = rowEl.getBoundingClientRect()
-        var box = card.getBoundingClientRect()
-        var viewport = doc.documentElement && doc.documentElement.clientWidth ? doc.documentElement.clientWidth : 1200
-        var left = row.right + 10
-        if (left + box.width > viewport - 8) left = Math.max(8, row.left - box.width - 10)
-        var top = row.top + (row.height || 0) / 2 - (box.height || 0) / 2
-        if (top < 8) top = 8
-        card.style.left = left + 'px'
-        card.style.top = top + 'px'
-      }
-    }
-
-    /** @param {*} event @returns {void} */
-    function onMouseOver(event) {
-      if (rowEl === null || !event || !event.target) return
-      if (cardEl !== null && contains(cardEl, event.target)) return
-      if (!contains(rowEl, event.target)) return
-      hideCard()
-      showCard()
-    }
-
-    /** @param {*} event @returns {void} */
-    function onMouseOut(event) {
-      if (cardEl === null) return
-      var to = event ? event.relatedTarget : null
-      if (to && (contains(rowEl, to) || contains(cardEl, to))) return
-      hideCard()
-    }
 
     /**
      * @param {*} payload
@@ -528,17 +408,8 @@
      */
     function apply(payload) {
       if (!doc) return
-      lastPayload = payload || null
       var unread = payload && typeof payload.unread === 'number' && payload.unread > 0 ? payload.unread : 0
-      var label = paintRowBadge(doc, unread)
-      rowEl = rowOf(label)
-      if (rowEl !== null && typeof rowEl.setAttribute === 'function') {
-        var newest = payload && payload.latest ? payload.latest : null
-        rowEl.setAttribute(
-          'title',
-          newest ? newest.name + '：' + newest.text + '（' + clockOf(newest.at) + '）' : 'Whalebuddy',
-        )
-      }
+      paintRowBadge(doc, unread)
       var svg = typeof doc.querySelector === 'function' ? doc.querySelector('svg[data-wb-unread]') : null
       if (svg === null || svg === undefined || typeof svg.setAttribute !== 'function') return
       svg.setAttribute('data-wb-unread', unread > 0 ? '1' : '0')
@@ -569,9 +440,6 @@
         doc.addEventListener('visibilitychange', function () {
           if (doc.visibilityState === 'visible') void refresh()
         })
-        doc.addEventListener('mouseover', onMouseOver, true)
-        doc.addEventListener('mouseout', onMouseOut, true)
-        doc.addEventListener('scroll', hideCard, true)
       }
     }
 
@@ -580,7 +448,6 @@
       if (timer !== null && timers && typeof timers.clearInterval === 'function') timers.clearInterval(timer)
       timer = null
       started = false
-      hideCard()
     }
 
     return { start: start, stop: stop, refresh: refresh, apply: apply }
