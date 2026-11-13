@@ -53,6 +53,8 @@
     update: 'api/whalebuddy/update',
     create: 'api/whalebuddy/create',
     assign: 'api/whalebuddy/assign',
+    notices: 'api/whalebuddy/notices',
+    noticesRead: 'api/whalebuddy/notices/read',
   }
 
   /** The five surfaces, in tab order. */
@@ -149,6 +151,8 @@
     '.wb-chips{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}',
     '.wb-chip{display:inline-flex;align-items:center;height:24px;padding:0 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:999px;font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap}',
     '.wb-chipMono{font-family:var(--ds-font-family-code);font-size:10.5px}',
+    '.wb-iconDot{display:none}',
+    'svg[data-wb-unread="1"] .wb-iconDot{display:inline}',
     '.wb-tabs{flex:none;display:flex;gap:2px;margin-top:14px;padding:0 22px;border-bottom:1px solid var(--dsw-alias-border-l1);overflow-x:auto}',
     '.wb-tab{flex:none;height:38px;padding:0;margin-right:22px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--dsw-alias-label-tertiary);font-family:inherit;font-size:13px;cursor:pointer;white-space:nowrap}',
     '.wb-tab:hover:not(:disabled){color:var(--dsw-alias-label-primary)}',
@@ -173,6 +177,22 @@
     '.wb-level:disabled{opacity:.5;cursor:default}',
     '.wb-levelName{font-weight:600}',
     '.wb-levelMeta{color:var(--dsw-alias-label-tertiary)}',
+    '.wb-notice{padding:6px 0}',
+    '.wb-notice + .wb-notice{border-top:1px solid var(--dsw-alias-border-l1)}',
+    '.wb-noticeHead{display:flex;align-items:baseline;gap:8px}',
+    '.wb-noticeTime{flex:none;font-family:var(--ds-font-family-code);font-size:10.5px;color:var(--dsw-alias-label-tertiary)}',
+    '.wb-noticeText{flex:1;min-width:0;font-size:13px;line-height:1.6;word-break:break-word}',
+    '.wb-noticeRead{flex:none;border:0;background:transparent;padding:0;color:var(--dsw-alias-label-secondary);font-family:inherit;font-size:11.5px;cursor:pointer}',
+    '.wb-noticeRead:hover:not(:disabled){color:var(--dsw-alias-label-primary)}',
+    '.wb-noticeRead:disabled{opacity:.45;cursor:default}',
+    '.wb-noticeDetail{margin:2px 0 0 44px}',
+    '.wb-cap{display:flex;align-items:center;gap:6px;margin-top:10px;font-size:12px;color:var(--dsw-alias-label-secondary)}',
+    '.wb-capLabel{color:var(--dsw-alias-label-tertiary)}',
+    '.wb-stepBtn{width:22px;height:22px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:transparent;color:inherit;font-family:inherit;font-size:13px;line-height:1;cursor:pointer}',
+    '.wb-stepBtn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}',
+    '.wb-stepBtn:disabled{opacity:.4;cursor:default}',
+    '.wb-capValue{min-width:12px;text-align:center;color:var(--dsw-alias-label-primary)}',
+    '.wb-capUnit{color:var(--dsw-alias-label-tertiary)}',
     '.wb-field{display:flex;gap:10px;padding:5px 0;font-size:13px;line-height:1.6}',
     '.wb-fieldLabel{flex:none;width:52px;font-size:12px;color:var(--dsw-alias-label-tertiary)}',
     '.wb-fieldValue{min-width:0;word-break:break-word}',
@@ -272,7 +292,7 @@
    * The HTTP face of the console. Kept separate from the components so it can
    * be handed a stub in tests.
    * @param {typeof fetch} [fetchImpl]
-   * @returns {{ state: (slug?: string) => Promise<*>, save: (payload: object) => Promise<*>, update: (payload: object) => Promise<*>, create: (payload: object) => Promise<*>, assign: (payload: object) => Promise<*> }}
+   * @returns {{ state: (slug?: string) => Promise<*>, save: (payload: object) => Promise<*>, update: (payload: object) => Promise<*>, notices: () => Promise<*>, markRead: (payload: object) => Promise<*>, create: (payload: object) => Promise<*>, assign: (payload: object) => Promise<*> }}
    */
   function createApi(fetchImpl) {
     var run = typeof fetchImpl === 'function' ? fetchImpl : function () {
@@ -316,6 +336,12 @@
       update: function (payload) {
         return request(API.update, { method: 'POST', body: payload })
       },
+      notices: function () {
+        return request(API.notices)
+      },
+      markRead: function (payload) {
+        return request(API.noticesRead, { method: 'POST', body: payload })
+      },
       create: function (payload) {
         return request(API.create, { method: 'POST', body: payload })
       },
@@ -323,6 +349,82 @@
         return request(API.assign, { method: 'POST', body: payload })
       },
     }
+  }
+
+  /**
+   * `18:42`, for the sidebar title and the notice card.
+   * @param {unknown} stamp
+   * @returns {string}
+   */
+  function clockOf(stamp) {
+    if (typeof stamp !== 'number' || !Number.isFinite(stamp)) return ''
+    var date = new Date(stamp)
+    return String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0')
+  }
+
+  /**
+   * Keep the sidebar glyph honest without React: the shell owns the row, so we
+   * poll the aggregate endpoint and paint our own SVG dot and title directly.
+   * No document or no timers means no watcher; the plugin still mounts.
+   * @param {{ api: ReturnType<typeof createApi>, document?: Document, timers?: { setInterval: Function, clearInterval: Function }, intervalMs?: number }} options
+   * @returns {{ start: () => void, stop: () => void, refresh: () => Promise<void>, apply: (payload: *) => void }}
+   */
+  function createNoticeWatcher(options) {
+    var api = options.api
+    var doc = options.document
+    var timers = options.timers
+    var intervalMs = options.intervalMs || 30000
+    var timer = null
+    var started = false
+
+    /**
+     * @param {*} payload
+     * @returns {void}
+     */
+    function apply(payload) {
+      if (!doc || typeof doc.querySelector !== 'function') return
+      var svg = doc.querySelector('svg[data-wb-unread]')
+      if (svg === null || svg === undefined || typeof svg.setAttribute !== 'function') return
+      var unread = payload && typeof payload.unread === 'number' && payload.unread > 0 ? payload.unread : 0
+      svg.setAttribute('data-wb-unread', unread > 0 ? '1' : '0')
+      var title = typeof svg.querySelector === 'function' ? svg.querySelector('title') : null
+      if (title !== null && title !== undefined) {
+        var latest = payload && payload.latest ? payload.latest : null
+        title.textContent = unread > 0 && latest
+          ? latest.name + '：' + latest.text + '（' + clockOf(latest.at) + '）'
+          : 'Whalebuddy'
+      }
+    }
+
+    /** @returns {Promise<void>} */
+    function refresh() {
+      return Promise.resolve()
+        .then(function () { return api.notices() })
+        .then(apply)
+        .catch(function () {})
+    }
+
+    /** @returns {void} */
+    function start() {
+      if (started || !doc || !timers || typeof timers.setInterval !== 'function') return
+      started = true
+      void refresh()
+      timer = timers.setInterval(function () { void refresh() }, intervalMs)
+      if (typeof doc.addEventListener === 'function') {
+        doc.addEventListener('visibilitychange', function () {
+          if (doc.visibilityState === 'visible') void refresh()
+        })
+      }
+    }
+
+    /** @returns {void} */
+    function stop() {
+      if (timer !== null && timers && typeof timers.clearInterval === 'function') timers.clearInterval(timer)
+      timer = null
+      started = false
+    }
+
+    return { start: start, stop: stop, refresh: refresh, apply: apply }
   }
 
   /**
@@ -517,12 +619,24 @@
           strokeLinecap: 'round',
           strokeLinejoin: 'round',
           'data-dsh-panel-entry': PANEL_ID,
+          'data-wb-unread': '0',
           'aria-hidden': 'true',
         },
+        React.createElement('title', { key: 'title' }, 'Whalebuddy'),
         React.createElement('circle', { key: 'head', cx: 8.8, cy: 7.4, r: 3.3 }),
         React.createElement('path', { key: 'body', d: 'M2.9 19.9c0-3.3 2.6-5.9 5.9-5.9s5.9 2.6 5.9 5.9' }),
         React.createElement('path', { key: 'second-head', d: 'M15.6 4.4a3.2 3.2 0 0 1 0 6' }),
         React.createElement('path', { key: 'second-body', d: 'M17.3 13.9c2.3.6 4 2.7 4 6' }),
+        React.createElement('circle', {
+          key: 'dot',
+          className: 'wb-iconDot',
+          'data-wb-dot': '',
+          cx: 21,
+          cy: 3,
+          r: 2.5,
+          fill: 'var(--wb-clay)',
+          stroke: 'none',
+        }),
       )
     }
   }
@@ -565,11 +679,12 @@
    * host's save answer.
    * @param {*} React
    * @param {ReturnType<typeof createApi>} api
-   * @param {{ startSession?: (workspaceId: string, presetId: string) => void }} [options]
+   * @param {{ startSession?: (workspaceId: string, presetId: string) => void, notices?: { apply: (payload: *) => void, refresh: () => Promise<void> } }} [options]
    * @returns {*} the `main` slot page component
    */
   function createPage(React, api, options) {
     var h = React.createElement
+    var notices = options && options.notices
     var startSession = (options && options.startSession) || function () {
       throw new Error('当前界面不支持从面板开会话')
     }
@@ -1175,7 +1290,110 @@
         }
       }
 
+      var recentNotices = (colleague && Array.isArray(colleague.notices) ? colleague.notices : []).slice(-5)
+      var unreadNotices = 0
+      for (var noticeIndex = 0; noticeIndex < recentNotices.length; noticeIndex += 1) {
+        if (recentNotices[noticeIndex] && recentNotices[noticeIndex].readAt === undefined) unreadNotices += 1
+      }
+      var noticeCap = colleague && Number.isInteger(colleague.noticeCap) ? colleague.noticeCap : 2
+
+      /**
+       * Mark one note read; the host answers with the new roll-up, which also
+       * repaints the sidebar dot without a reload.
+       * @param {string} id
+       * @returns {Promise<void>}
+       */
+      async function markNoticeRead(id) {
+        if (selected === '' || busy) return
+        setBusy(true)
+        setStatus(null)
+        var ticket = requestRef.current
+        try {
+          var aggregate = await api.markRead({ slug: selected, id: id })
+          if (ticket !== requestRef.current) return
+          var stamp = Date.now()
+          setState(function (current) {
+            if (current === null || current.colleague === null || current.colleague === undefined) return current
+            var list = Array.isArray(current.colleague.notices) ? current.colleague.notices : []
+            return {
+              employees: current.employees,
+              selected: current.selected,
+              workspaces: current.workspaces,
+              colleague: Object.assign({}, current.colleague, {
+                notices: list.map(function (notice) {
+                  return notice && notice.id === id ? Object.assign({}, notice, { readAt: stamp }) : notice
+                }),
+              }),
+            }
+          })
+          if (notices && typeof notices.apply === 'function') notices.apply(aggregate)
+          setStatus({ kind: 'ok', text: '知道了' })
+        } catch (error) {
+          setStatus({ kind: 'error', text: '标记失败：' + describe(error) })
+        } finally {
+          if (ticket === requestRef.current) setBusy(false)
+        }
+      }
+
+      /**
+       * @param {number} next
+       * @returns {Promise<void>}
+       */
+      async function changeNoticeCap(next) {
+        if (selected === '' || busy || next < 1 || next > 5) return
+        setBusy(true)
+        setStatus(null)
+        var ticket = requestRef.current
+        try {
+          var answer = await api.update({ slug: selected, noticeCap: next })
+          if (ticket !== requestRef.current) return
+          setState(answer)
+          setStatus({ kind: 'ok', text: '每天最多 ' + next + ' 条' })
+        } catch (error) {
+          setStatus({ kind: 'error', text: '改上限失败：' + describe(error) })
+        } finally {
+          if (ticket === requestRef.current) setBusy(false)
+        }
+      }
+
+      var noticeCard = h('section', { className: 'wb-card', 'data-dsh-part': 'colleague-notices' },
+        h('div', { className: 'wb-cardHead' },
+          h('h3', { className: 'wb-cardTitle' }, '她的话'),
+          recentNotices.length === 0
+            ? null
+            : h('span', { className: 'wb-cardAction wb-hint' },
+                recentNotices.length + ' 条' + (unreadNotices > 0 ? ' · 未读 ' + unreadNotices : ''))
+        ),
+        recentNotices.length === 0
+          ? h('div', null,
+              h('p', { className: 'wb-inlineEmpty' },
+                autonomy === 'L1' ? '现在是 L1：随叫随到，她不会主动找你。' : '今天还没找过你。'),
+              autonomy === 'L1'
+                ? null
+                : h('p', { className: 'wb-hint', style: { marginTop: '4px' } },
+                    '她收工后留一句，每天最多 ' + noticeCap + ' 条。')
+            )
+          : recentNotices.map(function (notice, index) {
+              return h('div', { key: notice.id || String(index), className: 'wb-notice' },
+                h('div', { className: 'wb-noticeHead' },
+                  h('span', { className: 'wb-noticeTime' }, clockOf(notice.at)),
+                  h('span', { className: 'wb-noticeText' }, notice.text),
+                  notice.readAt === undefined
+                    ? h('button', {
+                        type: 'button',
+                        className: 'wb-noticeRead',
+                        disabled: busy,
+                        onClick: function () { void markNoticeRead(notice.id) },
+                      }, '知道了')
+                    : h('span', { className: 'wb-hint' }, '已读')
+                ),
+                notice.detail ? h('p', { className: 'wb-hint wb-noticeDetail' }, notice.detail) : null
+              )
+            })
+      )
+
       var profilePane = h('div', { className: 'wb-pane', 'data-dsh-part': 'colleague-pane-profile' },
+        noticeCard,
         h('section', { className: 'wb-card', 'data-dsh-part': 'colleague-autonomy' },
           h('div', { className: 'wb-cardHead' },
             h('h3', { className: 'wb-cardTitle' }, '主动性'),
@@ -1199,6 +1417,27 @@
             })
           ),
           h('p', { className: 'wb-copy' }, autonomyInfo.text),
+          autonomy === 'L1'
+            ? null
+            : h('div', { className: 'wb-cap', 'data-dsh-part': 'colleague-notice-cap' },
+                h('span', { className: 'wb-capLabel' }, '每天最多'),
+                h('button', {
+                  type: 'button',
+                  className: 'wb-stepBtn',
+                  'aria-label': '减少上限',
+                  disabled: busy || isDirty('profile') || noticeCap <= 1,
+                  onClick: function () { void changeNoticeCap(noticeCap - 1) },
+                }, '−'),
+                h('b', { className: 'wb-capValue' }, String(noticeCap)),
+                h('button', {
+                  type: 'button',
+                  className: 'wb-stepBtn',
+                  'aria-label': '增加上限',
+                  disabled: busy || isDirty('profile') || noticeCap >= 5,
+                  onClick: function () { void changeNoticeCap(noticeCap + 1) },
+                }, '+'),
+                h('span', { className: 'wb-capUnit' }, '条')
+              ),
           isDirty('profile')
             ? h('p', { className: 'wb-hint', style: { marginTop: '6px' } }, '档案有未保存的改动，保存后再改档位。')
             : null,
@@ -1605,12 +1844,19 @@
                 }
                 ui.startSession(workspaceId, { agentPreset: presetIdToStart })
               }
-        var Page = createPage(React, api, { startSession: startSession })
         if (!ctx || !ctx.slots || typeof ctx.slots.inject !== 'function') {
           console.warn('[whalebuddy] slots service missing; colleague console not mounted')
           return
         }
-        var disposers = []
+
+        var watcher = createNoticeWatcher({
+          api: api,
+          document: typeof document === 'undefined' ? undefined : document,
+          timers: typeof window !== 'undefined' && typeof window.setInterval === 'function' ? window : undefined,
+        })
+        var Page = createPage(React, api, { startSession: startSession, notices: watcher })
+        var disposers = [function () { watcher.stop() }]
+        watcher.start()
         try {
           disposers.push(
             ctx.slots.inject(SLOT_PANEL_LIST, function () {

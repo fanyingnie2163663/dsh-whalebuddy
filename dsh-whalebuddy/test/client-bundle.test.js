@@ -12,7 +12,7 @@ const SOURCE = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'
  * @param {(url: string, init?: object) => Promise<object>} fetchImpl
  * @returns {{ id: string, factory: (require: (specifier: string) => unknown) => object }}
  */
-function loadBundle(fetchImpl, windowExtra = {}) {
+function loadBundle(fetchImpl, windowExtra = {}, globals = {}) {
   let registered
   const window = {
     ...windowExtra,
@@ -22,7 +22,7 @@ function loadBundle(fetchImpl, windowExtra = {}) {
       },
     },
   }
-  const sandbox = { window, fetch: fetchImpl, console }
+  const sandbox = { window, fetch: fetchImpl, console, ...globals }
   vm.createContext(sandbox)
   vm.runInContext(SOURCE, sandbox, { filename: 'client.js' })
   assert.ok(registered, 'the bundle must call window.__ModuleLoader__.load')
@@ -133,6 +133,10 @@ const PANEL_STATE = {
     },
     bound: [],
     preview: '### 身份\n# 逆戟\n- 岗位：视频',
+    notices: [
+      { id: 'n1', at: new Date(2026, 10, 14, 18, 42).getTime(), kind: 'collect', text: '改完了。', detail: '待办 +1' },
+    ],
+    noticeCap: 2,
   },
   workspaces: [{ id: 'w1', title: '示例项目', path: 'C:/work/a' }],
 }
@@ -147,7 +151,17 @@ async function okFetch(url, init) {
       if (url.includes('/assign')) {
         return { saved: true, bound: ['C:/work/a'], preview: '### 身份\n# 逆戟\n- 工作区：C:/work/a' }
       }
+      if (url.includes('/notices/read')) {
+        return { unread: 0, latest: null, bySlug: {} }
+      }
       if (url.includes('/update')) {
+        const sent = init && init.body ? JSON.parse(init.body) : {}
+        if (typeof sent.noticeCap === 'number') {
+          return {
+            ...PANEL_STATE,
+            colleague: { ...PANEL_STATE.colleague, noticeCap: sent.noticeCap },
+          }
+        }
         return {
           updated: { slug: 'niji', name: '逆戟', role: '视频', autonomy: 'L3', updatedAt: 3 },
           employees: [
@@ -181,7 +195,7 @@ okFetch.calls = []
  */
 function mountPlugin(options = {}) {
   okFetch.calls = []
-  const bundle = loadBundle(options.fetch ?? okFetch, options.window)
+  const bundle = loadBundle(options.fetch ?? okFetch, options.window, options.globals)
   const react = fakeReact()
   const plugin = bundle.factory((specifier) => {
     assert.equal(specifier, 'react')
@@ -251,7 +265,65 @@ test('the sidebar glyph is drawn at the size the shell asks for', () => {
   assert.equal(icon.props.viewBox, '0 0 24 24')
   assert.equal(icon.props.strokeWidth, 2)
   assert.equal(icon.props['data-dsh-panel-entry'], 'whalebuddy')
-  assert.equal(icon.props.children.length, 4)
+  assert.equal(icon.props.children.length, 6)
+  assert.equal(icon.props['data-wb-unread'], '0')
+  assert.ok(findAll(icon, (node) => node.props?.['data-wb-dot'] !== undefined)[0], 'the unread dot exists')
+  assert.equal(textOf(findAll(icon, (node) => node.type === 'title')[0]), 'Whalebuddy')
+})
+
+test('the sidebar glyph polls notices and paints its own dot', async () => {
+  const titleNode = { textContent: '' }
+  const svgNode = {
+    attrs: {},
+    setAttribute(name, value) {
+      this.attrs[name] = value
+    },
+    querySelector(selector) {
+      return selector === 'title' ? titleNode : null
+    },
+  }
+  const doc = {
+    visibilityState: 'visible',
+    querySelector(selector) {
+      return svgNode
+    },
+    addEventListener() {},
+    removeEventListener() {},
+  }
+  const timers = {
+    setInterval() {
+      return 1
+    },
+    clearInterval() {
+      timers.cleared = true
+    },
+  }
+  const fetchImpl = async (url) => {
+    fetchImpl.calls.push({ url })
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { unread: 1, latest: { slug: 'niji', name: '逆戟', text: '收工：待办 +2', at: Date.now() } }
+      },
+    }
+  }
+  fetchImpl.calls = []
+
+  const { cleanups } = mountPlugin({
+    fetch: fetchImpl,
+    globals: { document: doc },
+    window: { setInterval: timers.setInterval, clearInterval: timers.clearInterval },
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+
+  assert.equal(fetchImpl.calls[0].url, 'api/whalebuddy/notices')
+  assert.equal(svgNode.attrs['data-wb-unread'], '1')
+  assert.match(titleNode.textContent, /逆戟/)
+  assert.match(titleNode.textContent, /收工/)
+
+  cleanups[0]()
+  assert.equal(timers.cleared, true)
 })
 
 test('the page asks the host for state, then renders the rail, dossier and preview', async () => {
@@ -402,6 +474,75 @@ test('picking another autonomy level posts to the update route and adopts the an
   assert.ok(chip, 'the dossier chip follows the new level')
   const active = findAll(tree, (node) => node.type === 'button' && node.props?.className === 'wb-level' && node.props['data-on'] !== undefined)
   assert.match(textOf(active[0]), /L3/)
+})
+
+test('the notice card shows her note and marks it read', async () => {
+  const { registered, react } = mountPlugin()
+  const Page = registered[1].component
+  react.render(Page)
+  await new Promise((resolve) => setImmediate(resolve))
+  let tree = react.render(Page)
+
+  const notice = findAll(tree, (node) => node.props?.className === 'wb-notice')[0]
+  assert.ok(notice, 'the notice card renders')
+  assert.match(textOf(notice), /改完了。/)
+  assert.match(textOf(notice), /18:42/)
+
+  const read = findAll(notice, (node) => node.type === 'button' && textOf(node) === '知道了')[0]
+  assert.ok(read, 'the note offers 知道了')
+  read.props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 10))
+
+  const call = okFetch.calls.find((entry) => entry.url === 'api/whalebuddy/notices/read')
+  assert.ok(call, 'marking read posts to the notices route')
+  assert.deepEqual(JSON.parse(call.init.body), { slug: 'niji', id: 'n1' })
+})
+
+test('the daily cap stepper posts the next value', async () => {
+  const { registered, react } = mountPlugin()
+  const Page = registered[1].component
+  react.render(Page)
+  await new Promise((resolve) => setImmediate(resolve))
+  let tree = react.render(Page)
+
+  const value = findAll(tree, (node) => node.props?.className === 'wb-capValue')[0]
+  assert.equal(textOf(value), '2')
+  const plus = findAll(tree, (node) => node.type === 'button' && node.props?.['aria-label'] === '增加上限')[0]
+  assert.ok(plus, 'the stepper offers +')
+  plus.props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 10))
+
+  const call = okFetch.calls.find((entry) => entry.url === 'api/whalebuddy/update')
+  assert.ok(call, 'the cap change posts to update')
+  assert.deepEqual(JSON.parse(call.init.body), { slug: 'niji', noticeCap: 3 })
+})
+
+test('L1 hides the cap stepper and says she will not come', async () => {
+  const fetchImpl = async (url) => {
+    fetchImpl.calls.push({ url })
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          employees: [{ slug: 'niji', name: '逆戟', role: '视频', autonomy: 'L1', updatedAt: 1 }],
+          selected: 'niji',
+          colleague: { ...PANEL_STATE.colleague, notices: [], noticeCap: 2 },
+          workspaces: [],
+        }
+      },
+    }
+  }
+  fetchImpl.calls = []
+
+  const { registered, react } = mountPlugin({ fetch: fetchImpl })
+  const Page = registered[1].component
+  react.render(Page)
+  await new Promise((resolve) => setImmediate(resolve))
+  const tree = react.render(Page)
+
+  assert.equal(findAll(tree, (node) => node.props?.className === 'wb-stepBtn').length, 0)
+  assert.match(textOf(tree), /随叫随到/)
 })
 
 test('switching colleagues warns when another surface still has unsaved work', async () => {
