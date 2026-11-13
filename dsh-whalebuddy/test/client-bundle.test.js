@@ -233,41 +233,57 @@ test('the sidebar glyph is drawn at the size the shell asks for', () => {
   assert.equal(icon.props.children.length, 4)
 })
 
-test('the page asks the host for state, then renders the list, editor and preview', async () => {
+test('the page asks the host for state, then renders the rail, dossier and preview', async () => {
   const { registered, react } = mountPlugin()
   const Page = registered[1].component
 
   const first = react.render(Page)
-  assert.equal(typeof first.type, 'string')
-  assert.equal(textOf(findAll(first, (node) => node.type === 'h2')[0]), 'Whalebuddy')
+  assert.equal(textOf(findAll(first, (node) => node.type === 'h1')[0]), '同事')
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(okFetch.calls[0].url, 'api/whalebuddy/state')
 
-  const second = react.render(Page)
-  const items = findAll(second, (node) => node.props?.className === 'wb-item')
+  const tree = react.render(Page)
+  const items = findAll(tree, (node) => node.props?.className === 'wb-item')
   assert.equal(items.length, 2)
   assert.match(textOf(items[0]), /逆戟/)
   assert.match(textOf(items[0]), /视频/)
+  assert.match(textOf(items[0]), /月|分钟前|小时前|刚刚/)
 
-  const textarea = findAll(second, (node) => node.type === 'textarea')[0]
-  assert.match(textarea.props.value, /# 逆戟/)
+  const chips = findAll(tree, (node) => node.props?.className === 'wb-chip')
+  assert.ok(chips.some((chip) => /L2/.test(textOf(chip))), 'the autonomy chip renders')
+  assert.equal(textOf(findAll(tree, (node) => node.props?.className === 'wb-chip wb-chipMono')[0]), 'whalebuddy:niji')
 
-  const preview = findAll(second, (node) => node.props?.className === 'wb-pre')[0]
+  const preview = findAll(tree, (node) => node.props?.className === 'wb-pre')[0]
   assert.match(textOf(preview), /### 身份/)
+
+  const memoryTab = findAll(
+    tree,
+    (node) => node.type === 'button' && node.props?.role === 'tab' && /记忆/.test(textOf(node)),
+  )[0]
+  assert.ok(memoryTab, 'memory has a tab')
+  memoryTab.props.onClick()
+  const memoryView = react.render(Page)
+  assert.match(textOf(memoryView), /热记忆一句/)
+  assert.match(textOf(memoryView), /memory\/hot\.md · 第 1 行/)
 })
 
-test('the save button posts the selected file and adopts the returned preview', async () => {
+test('the save button posts the edited surface and adopts the returned preview', async () => {
   const { registered, react } = mountPlugin()
   const Page = registered[1].component
 
   react.render(Page)
   await new Promise((resolve) => setImmediate(resolve))
-  const tree = react.render(Page)
+  let tree = react.render(Page)
 
-  const saveButton = findAll(
-    tree,
-    (node) => node.type === 'button' && textOf(node) === '保存',
-  )[0]
+  const editButton = findAll(tree, (node) => node.type === 'button' && textOf(node) === '编辑')[0]
+  assert.ok(editButton, 'the profile card offers an editor')
+  editButton.props.onClick()
+  tree = react.render(Page)
+
+  const textarea = findAll(tree, (node) => node.type === 'textarea')[0]
+  assert.match(textarea.props.value, /# 逆戟/)
+
+  const saveButton = findAll(tree, (node) => node.type === 'button' && textOf(node) === '保存')[0]
   assert.ok(saveButton, 'the editor must offer a save button')
   saveButton.props.onClick()
   await new Promise((resolve) => setImmediate(resolve))
@@ -285,7 +301,7 @@ test('the save button posts the selected file and adopts the returned preview', 
   assert.match(textOf(preview), /### 同事/)
 })
 
-test('switching colleagues warns when an inactive tab still has unsaved work', async () => {
+test('switching colleagues warns when another surface still has unsaved work', async () => {
   const confirmCalls = []
   const { registered, react } = mountPlugin({
     window: {
@@ -301,14 +317,20 @@ test('switching colleagues warns when an inactive tab still has unsaved work', a
   await new Promise((resolve) => setImmediate(resolve))
   let tree = react.render(Page)
 
-  const textarea = findAll(tree, (node) => node.type === 'textarea')[0]
-  textarea.props.onChange({ target: { value: '# 逆戟\n改过的一行' } })
-  tree = react.render(Page)
-  const hotTab = findAll(tree, (node) => node.type === 'button' && textOf(node) === '热记忆')[0]
-  hotTab.props.onClick()
+  const memoryTab = findAll(
+    tree,
+    (node) => node.type === 'button' && node.props?.role === 'tab' && /记忆/.test(textOf(node)),
+  )[0]
+  memoryTab.props.onClick()
   tree = react.render(Page)
 
-  // The visible tab (hot) is clean; the profile draft is not.
+  const editButton = findAll(tree, (node) => node.type === 'button' && textOf(node) === '编辑')[0]
+  editButton.props.onClick()
+  tree = react.render(Page)
+  const textarea = findAll(tree, (node) => node.type === 'textarea')[0]
+  textarea.props.onChange({ target: { value: '改过的一句' } })
+  tree = react.render(Page)
+
   const other = findAll(tree, (node) => node.props?.className === 'wb-item')[1]
   other.props.onClick()
   await new Promise((resolve) => setImmediate(resolve))
@@ -322,7 +344,7 @@ test('switching colleagues warns when an inactive tab still has unsaved work', a
   )
 })
 
-test('the change log tab is read-only and never saves', async () => {
+test('the change log tab is read-only', async () => {
   const { registered, react } = mountPlugin()
   const Page = registered[1].component
 
@@ -330,17 +352,39 @@ test('the change log tab is read-only and never saves', async () => {
   await new Promise((resolve) => setImmediate(resolve))
   let tree = react.render(Page)
 
-  const changelogTab = findAll(tree, (node) => node.type === 'button' && textOf(node) === '变更')[0]
+  const changelogTab = findAll(
+    tree,
+    (node) => node.type === 'button' && node.props?.role === 'tab' && /变更/.test(textOf(node)),
+  )[0]
   assert.ok(changelogTab, 'the change log has a tab')
   changelogTab.props.onClick()
   tree = react.render(Page)
 
-  const textarea = findAll(tree, (node) => node.type === 'textarea')[0]
-  assert.equal(textarea.props.readOnly, true)
-  assert.equal(textarea.props.value, '- [2026-11-14 01:00] 收工：纠错 +1')
-  const saveButton = findAll(tree, (node) => node.type === 'button' && textOf(node) === '保存')[0]
-  assert.equal(saveButton.props.disabled, true)
-  assert.match(textOf(findAll(tree, (node) => node.props?.className === 'wb-hint')[0]), /只读/)
+  assert.equal(findAll(tree, (node) => node.type === 'textarea').length, 0, 'no editor on a read-only surface')
+  assert.match(textOf(tree), /收工/)
+  assert.match(textOf(tree), /纠错 \+1/)
+  assert.equal(findAll(tree, (node) => node.type === 'button' && textOf(node) === '保存').length, 0)
+})
+
+test('the console defaults to dark and the header toggles it', async () => {
+  const { registered, react } = mountPlugin()
+  const Page = registered[1].component
+
+  react.render(Page)
+  await new Promise((resolve) => setImmediate(resolve))
+  let tree = react.render(Page)
+  assert.equal(tree.props['data-wb-theme'], 'dark')
+
+  const toggle = findAll(tree, (node) => node.type === 'button' && textOf(node) === '浅色')[0]
+  assert.ok(toggle, 'the header offers a light switch')
+  toggle.props.onClick()
+  tree = react.render(Page)
+  assert.equal(tree.props['data-wb-theme'], 'light')
+
+  const back = findAll(tree, (node) => node.type === 'button' && textOf(node) === '深色')[0]
+  back.props.onClick()
+  tree = react.render(Page)
+  assert.equal(tree.props['data-wb-theme'], 'dark')
 })
 
 test('the tasks tab toggles a task through the save route', async () => {
@@ -351,7 +395,10 @@ test('the tasks tab toggles a task through the save route', async () => {
   await new Promise((resolve) => setImmediate(resolve))
   let tree = react.render(Page)
 
-  const tab = findAll(tree, (node) => node.type === 'button' && textOf(node) === '待办')[0]
+  const tab = findAll(
+    tree,
+    (node) => node.type === 'button' && node.props?.role === 'tab' && /待办/.test(textOf(node)),
+  )[0]
   assert.ok(tab, 'tasks have a tab')
   tab.props.onClick()
   tree = react.render(Page)
@@ -367,7 +414,49 @@ test('the tasks tab toggles a task through the save route', async () => {
   const body = JSON.parse(save.init.body)
   assert.equal(body.rel, 'memory/tasks.json')
   assert.match(body.text, /"status": "done"/)
-  assert.match(textOf(findAll(react.render(Page), (node) => node.props?.className === 'wb-hint')[0]), /勾选即保存/)
+})
+
+test('the onboarding wizard prefills a persona and posts the colleague', async () => {
+  const { registered, react } = mountPlugin()
+  const Page = registered[1].component
+
+  react.render(Page)
+  await new Promise((resolve) => setImmediate(resolve))
+  let tree = react.render(Page)
+
+  const newButton = findAll(tree, (node) => node.type === 'button' && textOf(node) === '＋ 新同事')[0]
+  assert.ok(newButton, 'the rail offers a new colleague')
+  newButton.props.onClick()
+  tree = react.render(Page)
+  assert.match(textOf(tree), /先给她起个名字/)
+
+  const persona = findAll(
+    tree,
+    (node) => node.type === 'button' && node.props?.className === 'wb-option' && /逆戟/.test(textOf(node)),
+  )[0]
+  assert.ok(persona, 'the persona cards render')
+  persona.props.onClick()
+  tree = react.render(Page)
+
+  for (let step = 0; step < 3; step += 1) {
+    const next = findAll(tree, (node) => node.type === 'button' && textOf(node) === '下一步')[0]
+    assert.ok(next, 'the wizard advances')
+    next.props.onClick()
+    tree = react.render(Page)
+  }
+
+  const submit = findAll(tree, (node) => node.type === 'button' && textOf(node) === '建她')[0]
+  assert.ok(submit, 'the last step creates')
+  submit.props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 10))
+
+  const call = okFetch.calls.find((entry) => entry.url === 'api/whalebuddy/create')
+  assert.ok(call, 'creating posts to the host')
+  const body = JSON.parse(call.init.body)
+  assert.equal(body.name, '逆戟')
+  assert.equal(body.role, '写码')
+  assert.equal(body.autonomy, 'L2')
+  assert.match(body.temperament, /锋利/)
 })
 
 test('a workspace is assigned and opened with the colleague preset', async () => {
@@ -386,7 +475,7 @@ test('a workspace is assigned and opened with the colleague preset', async () =>
   let tree = react.render(Page)
 
   const add = findAll(tree, (node) => node.props?.className === 'wb-wsAdd')[0]
-  assert.ok(add, 'the sidebar offers a workspace picker')
+  assert.ok(add, 'the profile offers a workspace picker')
   add.props.onClick()
   tree = react.render(Page)
   const row = findAll(tree, (node) => node.props?.className === 'wb-ws')[0]
