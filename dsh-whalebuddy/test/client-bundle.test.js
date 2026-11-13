@@ -134,7 +134,7 @@ const PANEL_STATE = {
     bound: [],
     preview: '### 身份\n# 逆戟\n- 岗位：视频',
   },
-  workspaces: [{ id: 'w1', title: '未命名项目', path: 'C:/work/a' }],
+  workspaces: [{ id: 'w1', title: '示例项目', path: 'C:/work/a' }],
 }
 
 /** @param {string} url @param {object} [init] */

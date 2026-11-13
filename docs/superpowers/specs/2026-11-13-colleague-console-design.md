@@ -127,7 +127,7 @@ POST 返回 `{saved: true, preview: '<新注入>'}`，客户端直接替换右�
 - **客户端插件必须是构建产物**：`exports["./client"]` 指向 built file；源码是 TSX，组件作为第二个参数传给 `ctx.slots.register(key, Component)`。**手写 client.js 不是一条路**——这就是为什么所有插件客户端都是压缩 bundle。
 - 共享模块（React 等）走 `dsh.client.external` 的模块表。
 - 官方工具链 `dsh-primer`（Apache-2.0、零依赖、无 install 脚本）：`new` 脚手架（tsdown + vitest + cordis.patch.yml）/ `check` / `verify` / `seams`。
-- 本机 `npx dsh-primer@0.4.5 --help` 可用；**`seams` 子命令在这台机器上挂了**：内部调用路径含空格（`'C:\Program' is not recognized`）。
+- 本机 `npx dsh-primer@0.4.5 --help` 可用；**`seams` 子命令在安装路径含空格时会挂**（内部调用未给路径加引号）。
 
 **下一步**：用 `dsh-primer new` 拿 tsdown 构建配置，搬进 `dsh-whalebuddy`，写 `src/client.tsx`，构建出 `lib/client.js`，再 `ctx.slots.inject('sidebar.panellist' | 'main', …)` 注册。宿主半边（`lib/host/panel-data.js`，8 测试全绿）已就绪。
 
