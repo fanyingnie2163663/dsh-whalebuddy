@@ -401,6 +401,25 @@
     return hit
   }
 
+  /**
+   * The row container is the highest ancestor that still carries only the
+   * label text, so hovering the icon counts as hovering the row.
+   * @param {Element | null} label
+   * @returns {Element | null}
+   */
+  function rowOf(label) {
+    if (!label) return null
+    var row = label
+    var node = label
+    while (node && node.parentElement) {
+      var parent = node.parentElement
+      if (!parent.textContent || parent.textContent.trim() !== 'Whalebuddy') break
+      row = parent
+      node = parent
+    }
+    return row
+  }
+
   function createNoticeWatcher(options) {
     var api = options.api
     var doc = options.document
@@ -512,9 +531,14 @@
       lastPayload = payload || null
       var unread = payload && typeof payload.unread === 'number' && payload.unread > 0 ? payload.unread : 0
       var label = paintRowBadge(doc, unread)
-      rowEl = label && typeof label.closest === 'function'
-        ? label.closest('button,a,[role="button"],[role="menuitem"],[tabindex]') || label
-        : label
+      rowEl = rowOf(label)
+      if (rowEl !== null && typeof rowEl.setAttribute === 'function') {
+        var newest = payload && payload.latest ? payload.latest : null
+        rowEl.setAttribute(
+          'title',
+          newest ? newest.name + '：' + newest.text + '（' + clockOf(newest.at) + '）' : 'Whalebuddy',
+        )
+      }
       var svg = typeof doc.querySelector === 'function' ? doc.querySelector('svg[data-wb-unread]') : null
       if (svg === null || svg === undefined || typeof svg.setAttribute !== 'function') return
       svg.setAttribute('data-wb-unread', unread > 0 ? '1' : '0')

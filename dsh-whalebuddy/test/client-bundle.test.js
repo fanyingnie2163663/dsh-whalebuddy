@@ -360,6 +360,7 @@ test('hovering the rail row opens a card with the note', async () => {
   const joined = texts.join('|')
   assert.ok(joined.includes('逆戟：收工：待办 +2'), joined)
   assert.ok(joined.includes('1 条未读'), joined)
+  assert.match(String(row.attrs.title), /逆戟/)
 
   listeners.mouseout[0]({ relatedTarget: null })
   assert.equal(body.children.length, 0)
