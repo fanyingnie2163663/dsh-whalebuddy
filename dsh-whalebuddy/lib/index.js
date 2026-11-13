@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { appendFile, rename, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -7,6 +8,7 @@ import { createQueue, mergeExtraction, ruleExtractor } from './distill.js'
 import { createPanelRoutes, isConsoleRequestAllowed, ROUTES } from './host/routes.js'
 import { assembleMemory } from './inject.js'
 import { DEFAULT_NAMES } from './names.js'
+import { NOTICE_FILE, appendWithinCap, collectNotice, noticeCapFromState, parseNotices } from './notices.js'
 import { registerEmployeePresets, resolveTemplateRows } from './presets.js'
 import { createStore } from './store.js'
 
@@ -380,6 +382,7 @@ async function appendLog(store, employee, date, entry) {
  * @property {{ push(slug: string, task: () => Promise<void>): Promise<void> }} queue
  * @property {TranscriptBlock[] | string | ((invocation?: CommandInvocation) => TranscriptBlock[])} transcript
  * @property {() => Promise<string>} refresh
+ * @property {(message: string) => void} [warn]
  */
 
 /**
@@ -396,11 +399,38 @@ async function appendLog(store, employee, date, entry) {
  * @param {CollectCommandOptions} options
  * @returns {{ name: string, description: string, handler: (invocation?: CommandInvocation) => Promise<CommandResult> }}
  */
-export function createCollectCommand({ store, employee, queue, transcript, refresh }) {
+export function createCollectCommand({ store, employee, queue, transcript, refresh, warn }) {
   // Compatibility: a caller may still pass one plain string or one array. A
   // function is resolved per invocation; a string has no roles and keeps the
   // legacy whole-text fallback.
   const source = transcript
+
+  /**
+   * Leave one user-facing note after a collect that changed something. Failures
+   * are warnings: a note must never turn a good collect into an error.
+   * @param {Extraction} extraction
+   * @param {string} summary
+   * @returns {Promise<void>}
+   */
+  async function leaveNotice(extraction, summary) {
+    try {
+      const employees = await store.list()
+      const self = employees.find((entry) => entry.slug === employee)
+      if (self === undefined || (self.autonomy !== 'L2' && self.autonomy !== 'L3')) return
+      const [stateText, noticesText] = await Promise.all([
+        store.read(employee, 'state.json'),
+        store.read(employee, NOTICE_FILE),
+      ])
+      const at = Date.now()
+      const notice = collectNotice(extraction, summary, at, randomUUID())
+      if (notice === null) return
+      const next = appendWithinCap(parseNotices(noticesText), notice, noticeCapFromState(stateText), at)
+      if (next === null) return
+      await store.write(employee, NOTICE_FILE, `${JSON.stringify(next, null, 2)}\n`)
+    } catch (error) {
+      if (typeof warn === 'function') warn(`给「${employee}」留便签失败：${describeError(error)}`)
+    }
+  }
 
   return {
     name: COLLECT_COMMAND_NAME,
@@ -433,7 +463,10 @@ export function createCollectCommand({ store, employee, queue, transcript, refre
           await store.write(employee, 'memory/recent.md', merged.recent)
           if (merged.logEntry !== '') await appendLog(store, employee, stamp, merged.logEntry)
           const summary = describeExtraction(extraction)
-          if (summary !== '') await appendChange(store, employee, '收工', summary)
+          if (summary !== '') {
+            await appendChange(store, employee, '收工', summary)
+            await leaveNotice(extraction, summary)
+          }
           await refresh()
         })
       } catch (error) {
@@ -532,6 +565,7 @@ async function applyScoped(ctx, config, employee) {
     queue: collectQueue,
     transcript: (invocation) => transcriptFor(sessionKey(invocation?.agent?.session)),
     refresh,
+    warn: (message) => warn(ctx, message),
   })
   if (typeof ctx.effect === 'function' && typeof ctx.commands?.register === 'function') {
     ctx.effect(() => ctx.commands.register(command))

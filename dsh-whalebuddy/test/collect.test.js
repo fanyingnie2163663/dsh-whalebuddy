@@ -211,6 +211,81 @@ test('createCollectCommand tolerates a plain string transcript', async () => {  
   assert.deepEqual(tasks.map((task) => task.text), ['答应我周五前改完'])
 })
 
+
+test('/collect leaves one notice made from the report', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-notice-'))
+  const store = createStore(root)
+  await store.create(employee('小白'))
+  const command = createCollectCommand({
+    store,
+    employee: '小白',
+    queue: { push: (slug, task) => task() },
+    transcript: '改完了登录页的爬虫。还有尾巴。',
+    refresh: async () => '',
+  })
+
+  const result = await command.handler()
+
+  assert.equal(result.kind, 'success')
+  const notices = JSON.parse((await store.read('小白', 'memory/notices.json')) ?? '[]')
+  assert.equal(notices.length, 1)
+  assert.equal(notices[0].text, '改完了登录页的爬虫。')
+  assert.equal(notices[0].detail, '日志 +1')
+  assert.equal(typeof notices[0].at, 'number')
+})
+
+test('/collect respects the cap and L1', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-notice-cap-'))
+  const store = createStore(root)
+  await store.create(employee('小白'))
+  await store.setNoticeCap('小白', 1)
+  const command = createCollectCommand({
+    store,
+    employee: '小白',
+    queue: { push: (slug, task) => task() },
+    transcript: '改完了登录页的爬虫。',
+    refresh: async () => '',
+  })
+
+  await command.handler()
+  await command.handler()
+
+  const capped = JSON.parse((await store.read('小白', 'memory/notices.json')) ?? '[]')
+  assert.equal(capped.length, 1)
+
+  const quiet = createStore(await mkdtemp(join(tmpdir(), 'whalebuddy-notice-l1-')))
+  await quiet.create({ ...employee('一角'), autonomy: 'L1' })
+  const silent = createCollectCommand({
+    store: quiet,
+    employee: '一角',
+    queue: { push: (slug, task) => task() },
+    transcript: '改完了登录页的爬虫。',
+    refresh: async () => '',
+  })
+  await silent.handler()
+  assert.equal(await quiet.read('一角', 'memory/notices.json'), undefined)
+})
+
+test('/collect survives a corrupt notices file', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'whalebuddy-notice-bad-'))
+  const store = createStore(root)
+  await store.create(employee('小白'))
+  await store.write('小白', 'memory/notices.json', '{not json')
+  const command = createCollectCommand({
+    store,
+    employee: '小白',
+    queue: { push: (slug, task) => task() },
+    transcript: '改完了登录页的爬虫。',
+    refresh: async () => '',
+  })
+
+  const result = await command.handler()
+
+  assert.equal(result.kind, 'success')
+  const notices = JSON.parse((await store.read('小白', 'memory/notices.json')) ?? '[]')
+  assert.equal(notices.length, 1)
+})
+
 test('/collect writes the distilled memory and refreshes only its own instance', async () => {
   const rootA = await mkdtemp(join(tmpdir(), 'whalebuddy-collect-a-'))
   const rootB = await mkdtemp(join(tmpdir(), 'whalebuddy-collect-b-'))
