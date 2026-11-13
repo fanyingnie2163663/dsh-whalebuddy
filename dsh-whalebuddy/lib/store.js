@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { isNoticeCap } from './notices.js'
 
 /**
  * @typedef {object} CreateEmployeeInput
@@ -35,6 +36,7 @@ import { dirname, join } from 'node:path'
  * @property {() => Promise<EmployeeSummary[]>} list
  * @property {(input: CreateEmployeeInput) => Promise<EmployeeSummary>} create
  * @property {(slug: string, autonomy: 'L1' | 'L2' | 'L3') => Promise<EmployeeSummary>} setAutonomy
+ * @property {(slug: string, cap: number) => Promise<void>} setNoticeCap
  * @property {(slug: string, rel: string) => Promise<string | undefined>} read
  * @property {(slug: string, rel: string, text: string) => Promise<void>} write
  * @property {(slug: string) => Promise<Task[]>} tasks
@@ -331,6 +333,32 @@ export function createStore(root) {
   }
 
   /**
+   * Read one colleague's state snapshot; a missing or corrupt file is an empty
+   * object, so the caller fills in what it knows.
+   * @param {string} slug
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async function stateOf(slug) {
+    const raw = await readTextIfExists(join(rootDir, slug, 'state.json'))
+    if (raw === undefined) return {}
+    try {
+      const parsed = JSON.parse(raw)
+      return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
+
+  /**
+   * @param {string} slug
+   * @param {Record<string, unknown>} state
+   * @returns {Promise<void>}
+   */
+  async function writeState(slug, state) {
+    await writeAtomic(join(rootDir, slug, 'state.json'), `${JSON.stringify(state, null, 2)}\n`)
+  }
+
+  /**
    * Change one colleague's autonomy level, keeping the two places it lives in
    * agreement: the profile line the model reads, and the state snapshot the
    * index and the console read. Unknown slugs and levels are refused before
@@ -347,19 +375,10 @@ export function createStore(root) {
     if (existing === undefined) throw new Error(`no colleague named "${slug}"`)
 
     const dir = join(rootDir, slug)
-    const rawState = await readTextIfExists(join(dir, 'state.json'))
-    let state = {}
-    if (rawState !== undefined) {
-      try {
-        const parsed = JSON.parse(rawState)
-        if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) state = parsed
-      } catch {
-        // A corrupt snapshot is rebuilt from the directory, like the index.
-      }
-    }
+    const state = await stateOf(slug)
     if (typeof state.presetId !== 'string') state.presetId = ''
     state.autonomy = autonomy
-    await writeAtomic(join(dir, 'state.json'), `${JSON.stringify(state, null, 2)}\n`)
+    await writeState(slug, state)
 
     const profile = (await readTextIfExists(join(dir, 'profile.md'))) ?? ''
     const line = `- 档位：${autonomy}`
@@ -384,6 +403,23 @@ export function createStore(root) {
       await writeAtomic(join(rootDir, INDEX_FILE), `${JSON.stringify({ employees }, null, 2)}\n`)
     })
     return summary
+  }
+
+  /**
+   * Change one colleague's daily notice cap. Only the state snapshot carries
+   * it: the profile template stays human-stable and the index has no cap field.
+   * @param {string} slug
+   * @param {number} cap
+   * @returns {Promise<void>}
+   */
+  async function setNoticeCap(slug, cap) {
+    if (!isNoticeCap(cap)) throw new TypeError(`invalid notice cap: ${String(cap)}`)
+    const existing = await summaryOf(slug)
+    if (existing === undefined) throw new Error(`no colleague named "${slug}"`)
+    const state = await stateOf(slug)
+    if (typeof state.presetId !== 'string') state.presetId = ''
+    state.noticeCap = cap
+    await writeState(slug, state)
   }
 
   /**
@@ -427,5 +463,5 @@ export function createStore(root) {
     await write(slug, 'memory/tasks.json', `${JSON.stringify(tasks, null, 2)}\n`)
   }
 
-  return { list, create, setAutonomy, read, write, tasks, saveTasks, repair }
+  return { list, create, setAutonomy, setNoticeCap, read, write, tasks, saveTasks, repair }
 }

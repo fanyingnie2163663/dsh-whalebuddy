@@ -274,6 +274,42 @@ test('setAutonomy refuses a colleague that does not exist', async () => {
   await assert.rejects(stat(join(dir, 'ghost')))
 })
 
+test('setNoticeCap writes the cap and keeps the preset and level', async () => {
+  const dir = await root()
+  const store = createStore(dir)
+  const created = await store.create(input({ presetId: 'coder', autonomy: 'L2' }))
+
+  await store.setNoticeCap(created.slug, 4)
+
+  const state = JSON.parse(await readFile(join(dir, created.slug, 'state.json'), 'utf8'))
+  assert.deepEqual(state, { presetId: 'coder', autonomy: 'L2', noticeCap: 4 })
+
+  await store.setAutonomy(created.slug, 'L3')
+  const after = JSON.parse(await readFile(join(dir, created.slug, 'state.json'), 'utf8'))
+  assert.equal(after.autonomy, 'L3')
+  assert.equal(after.noticeCap, 4)
+})
+
+test('setNoticeCap refuses values outside 1..5', async () => {
+  const dir = await root()
+  const store = createStore(dir)
+  const created = await store.create(input())
+
+  for (const bad of [0, 6, 1.5, '2']) {
+    await assert.rejects(() => store.setNoticeCap(created.slug, /** @type {any} */ (bad)), /cap/)
+  }
+  const state = JSON.parse(await readFile(join(dir, created.slug, 'state.json'), 'utf8'))
+  assert.equal(state.noticeCap, undefined)
+})
+
+test('setNoticeCap refuses a colleague that does not exist', async () => {
+  const dir = await root()
+  const store = createStore(dir)
+
+  await assert.rejects(() => store.setNoticeCap('ghost', 2), /ghost/)
+})
+
+
 test('default names carry a temperament', async () => {
   const { DEFAULT_NAMES } = await import('../lib/names.js')
   assert.deepEqual(DEFAULT_NAMES.map(n => n.name), ['小白', '逆戟', '座头', '一角', '蓝鲸'])
