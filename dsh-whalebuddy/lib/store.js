@@ -34,6 +34,7 @@ import { dirname, join } from 'node:path'
  * @typedef {object} Store
  * @property {() => Promise<EmployeeSummary[]>} list
  * @property {(input: CreateEmployeeInput) => Promise<EmployeeSummary>} create
+ * @property {(slug: string, autonomy: 'L1' | 'L2' | 'L3') => Promise<EmployeeSummary>} setAutonomy
  * @property {(slug: string, rel: string) => Promise<string | undefined>} read
  * @property {(slug: string, rel: string, text: string) => Promise<void>} write
  * @property {(slug: string) => Promise<Task[]>} tasks
@@ -50,6 +51,12 @@ const DUPLICATE_SLUG_LIMIT = 50
 const FALLBACK_SLUG = 'colleague'
 const FALLBACK_TEMPERAMENT = '未定'
 const INDEX_FILE = 'index.json'
+
+/** The levels the console may set; anything else is refused. */
+const AUTONOMY_LEVELS = Object.freeze(['L1', 'L2', 'L3'])
+
+/** The profile line holding the colleague's autonomy level. */
+const AUTONOMY_LINE = /^-[ \t]*档位[:：][ \t]*(.*)$/m
 
 /** Distinguishes the temp files of concurrent writers in this process. */
 let tempSequence = 0
@@ -324,6 +331,62 @@ export function createStore(root) {
   }
 
   /**
+   * Change one colleague's autonomy level, keeping the two places it lives in
+   * agreement: the profile line the model reads, and the state snapshot the
+   * index and the console read. Unknown slugs and levels are refused before
+   * anything is written.
+   * @param {string} slug
+   * @param {'L1' | 'L2' | 'L3'} autonomy
+   * @returns {Promise<EmployeeSummary>}
+   */
+  async function setAutonomy(slug, autonomy) {
+    if (!AUTONOMY_LEVELS.includes(autonomy)) {
+      throw new TypeError(`invalid autonomy: ${String(autonomy)}`)
+    }
+    const existing = await summaryOf(slug)
+    if (existing === undefined) throw new Error(`no colleague named "${slug}"`)
+
+    const dir = join(rootDir, slug)
+    const rawState = await readTextIfExists(join(dir, 'state.json'))
+    let state = {}
+    if (rawState !== undefined) {
+      try {
+        const parsed = JSON.parse(rawState)
+        if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) state = parsed
+      } catch {
+        // A corrupt snapshot is rebuilt from the directory, like the index.
+      }
+    }
+    if (typeof state.presetId !== 'string') state.presetId = ''
+    state.autonomy = autonomy
+    await writeAtomic(join(dir, 'state.json'), `${JSON.stringify(state, null, 2)}\n`)
+
+    const profile = (await readTextIfExists(join(dir, 'profile.md'))) ?? ''
+    const line = `- 档位：${autonomy}`
+    const trimmed = profile.trimEnd()
+    const nextProfile = AUTONOMY_LINE.test(profile)
+      ? profile.replace(AUTONOMY_LINE, line)
+      : `${trimmed}${trimmed === '' ? '' : '\n'}${line}\n`
+    await writeAtomic(join(dir, 'profile.md'), nextProfile)
+
+    const summary = (await summaryOf(slug)) ?? {
+      slug,
+      name: existing.name,
+      role: existing.role,
+      autonomy,
+      updatedAt: Date.now(),
+    }
+    await serializeIndex(rootDir, async () => {
+      const employees = await list()
+      const at = employees.findIndex((employee) => employee?.slug === slug)
+      if (at === -1) employees.push(summary)
+      else employees[at] = summary
+      await writeAtomic(join(rootDir, INDEX_FILE), `${JSON.stringify({ employees }, null, 2)}\n`)
+    })
+    return summary
+  }
+
+  /**
    * @param {string} slug
    * @param {string} rel
    * @returns {Promise<string | undefined>}
@@ -364,5 +427,5 @@ export function createStore(root) {
     await write(slug, 'memory/tasks.json', `${JSON.stringify(tasks, null, 2)}\n`)
   }
 
-  return { list, create, read, write, tasks, saveTasks, repair }
+  return { list, create, setAutonomy, read, write, tasks, saveTasks, repair }
 }

@@ -50,6 +50,7 @@
   var API = {
     state: 'api/whalebuddy/state',
     save: 'api/whalebuddy/save',
+    update: 'api/whalebuddy/update',
     create: 'api/whalebuddy/create',
     assign: 'api/whalebuddy/assign',
   }
@@ -165,6 +166,13 @@
     '.wb-meter{display:flex;gap:4px;margin-top:12px}',
     '.wb-meter span{flex:1;height:3px;border-radius:2px;background:var(--dsw-alias-border-l2)}',
     '.wb-meter span[data-on]{background:var(--dsw-alias-label-primary)}',
+    '.wb-levels{display:flex;gap:6px;margin-top:2px}',
+    '.wb-level{flex:1;min-width:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:transparent;color:inherit;font-family:inherit;font-size:12.5px;text-align:left;cursor:pointer}',
+    '.wb-level:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}',
+    '.wb-level[data-on]{border-color:var(--dsw-alias-label-primary);background:var(--dsw-specific-input-major)}',
+    '.wb-level:disabled{opacity:.5;cursor:default}',
+    '.wb-levelName{font-weight:600}',
+    '.wb-levelMeta{color:var(--dsw-alias-label-tertiary)}',
     '.wb-field{display:flex;gap:10px;padding:5px 0;font-size:13px;line-height:1.6}',
     '.wb-fieldLabel{flex:none;width:52px;font-size:12px;color:var(--dsw-alias-label-tertiary)}',
     '.wb-fieldValue{min-width:0;word-break:break-word}',
@@ -264,7 +272,7 @@
    * The HTTP face of the console. Kept separate from the components so it can
    * be handed a stub in tests.
    * @param {typeof fetch} [fetchImpl]
-   * @returns {{ state: (slug?: string) => Promise<*>, save: (payload: object) => Promise<*>, create: (payload: object) => Promise<*>, assign: (payload: object) => Promise<*> }}
+   * @returns {{ state: (slug?: string) => Promise<*>, save: (payload: object) => Promise<*>, update: (payload: object) => Promise<*>, create: (payload: object) => Promise<*>, assign: (payload: object) => Promise<*> }}
    */
   function createApi(fetchImpl) {
     var run = typeof fetchImpl === 'function' ? fetchImpl : function () {
@@ -304,6 +312,9 @@
       },
       save: function (payload) {
         return request(API.save, { method: 'POST', body: payload })
+      },
+      update: function (payload) {
+        return request(API.update, { method: 'POST', body: payload })
       },
       create: function (payload) {
         return request(API.create, { method: 'POST', body: payload })
@@ -759,7 +770,7 @@
             for (var index = 0; index < keys.length; index += 1) nextFiles[keys[index]] = current.colleague.files[keys[index]]
             nextFiles[file] = text
             return {
-              employees: current.employees,
+              employees: answer && Array.isArray(answer.employees) ? answer.employees : current.employees,
               selected: current.selected,
               workspaces: current.workspaces,
               colleague: {
@@ -1123,20 +1134,77 @@
           )
         })
 
+      var autonomy = selectedEmployee === null ? 'L2' : selectedEmployee.autonomy
+      if (AUTONOMY[autonomy] === undefined) autonomy = 'L2'
+      var autonomyInfo = AUTONOMY[autonomy]
+      // Changing the level rewrites the profile file; an unsaved profile edit
+      // would be silently overwritten, so the picker waits for it to be saved.
+      var autonomyLocked = busy || isDirty('profile')
+
+      /**
+       * Persist one autonomy level. The host rewrites the profile line and the
+       * state snapshot, then answers with the whole panel, so the dossier chip,
+       * the card and the injected preview agree after one round trip.
+       * @param {string} level
+       * @returns {Promise<void>}
+       */
+      async function setAutonomyLevel(level) {
+        if (selected === '' || busy) return
+        var current = selectedEmployee === null ? 'L2' : selectedEmployee.autonomy
+        if (level === current) return
+        setBusy(true)
+        setStatus(null)
+        var ticket = requestRef.current
+        try {
+          var next = await api.update({ slug: selected, autonomy: level })
+          // Another colleague was selected while this was in flight; that load wins.
+          if (ticket !== requestRef.current) return
+          setState(next)
+          setDrafts(function (currentDrafts) {
+            var copy = {}
+            var keys = Object.keys(currentDrafts || {})
+            for (var index = 0; index < keys.length; index += 1) copy[keys[index]] = currentDrafts[keys[index]]
+            delete copy['profile.md']
+            return copy
+          })
+          setStatus({ kind: 'ok', text: '主动性已改为 ' + level + ' · ' + AUTONOMY[level].name })
+        } catch (error) {
+          setStatus({ kind: 'error', text: '改档位失败：' + describe(error) })
+        } finally {
+          if (ticket === requestRef.current) setBusy(false)
+        }
+      }
+
       var profilePane = h('div', { className: 'wb-pane', 'data-dsh-part': 'colleague-pane-profile' },
-        h('section', { className: 'wb-card' },
-          h('div', { className: 'wb-cardHead' }, h('h3', { className: 'wb-cardTitle' }, '主动性')),
-          h('p', { className: 'wb-big' },
-            (selectedEmployee === null ? 'L2' : selectedEmployee.autonomy) + ' · ' +
-              (AUTONOMY[selectedEmployee === null ? 'L2' : selectedEmployee.autonomy] || AUTONOMY.L2).name
+        h('section', { className: 'wb-card', 'data-dsh-part': 'colleague-autonomy' },
+          h('div', { className: 'wb-cardHead' },
+            h('h3', { className: 'wb-cardTitle' }, '主动性'),
+            h('span', { className: 'wb-cardAction wb-hint' }, busy ? '保存中…' : '随时可调')
           ),
-          h('p', { className: 'wb-copy' },
-            (AUTONOMY[selectedEmployee === null ? 'L2' : selectedEmployee.autonomy] || AUTONOMY.L2).text
+          h('div', { className: 'wb-levels', role: 'group', 'aria-label': '主动性档位' },
+            ['L1', 'L2', 'L3'].map(function (level) {
+              var info = AUTONOMY[level]
+              return h('button', {
+                key: level,
+                type: 'button',
+                className: 'wb-level',
+                'data-on': level === autonomy ? '' : undefined,
+                'aria-pressed': level === autonomy,
+                disabled: autonomyLocked,
+                onClick: function () { void setAutonomyLevel(level) },
+              },
+                h('b', { className: 'wb-levelName' }, level),
+                h('span', { className: 'wb-levelMeta' }, ' · ' + info.name)
+              )
+            })
           ),
+          h('p', { className: 'wb-copy' }, autonomyInfo.text),
+          isDirty('profile')
+            ? h('p', { className: 'wb-hint', style: { marginTop: '6px' } }, '档案有未保存的改动，保存后再改档位。')
+            : null,
           h('div', { className: 'wb-meter', 'aria-hidden': 'true' },
             [1, 2, 3].map(function (step) {
-              var level = Number((selectedEmployee === null ? 'L2' : selectedEmployee.autonomy).slice(1))
-              return h('span', { key: step, 'data-on': step <= level ? '' : undefined })
+              return h('span', { key: step, 'data-on': step <= Number(autonomy.slice(1)) ? '' : undefined })
             })
           )
         ),

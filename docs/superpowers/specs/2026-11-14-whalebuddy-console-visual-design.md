@@ -186,3 +186,7 @@
 | P2 启用 | 待确认队列（Pending 画板）、记忆条目级编辑（MemoryEdit 画板，需 `- [id] (workspace:*)` 约定）、工具箱、「这一周」统计（需会话计数） |
 
 待确认与条目编辑的稿子不必重画：它们的数据形状就是 P2 的 `pending/` 与条目约定，届时直接接线。
+
+## 10 后续变更（2026-11-14）
+
+主动性从只读卡改成三档选择器：点击即可改，走新增的 `POST /api/whalebuddy/update`；为此改动了 `lib/store.js`（`setAutonomy`）、`lib/host/panel-data.js`（`changeAutonomy`）与 `lib/host/routes.js`。§2 里「不改 host 两个文件」的约束只针对本轮视觉落地，已被这条功能变更覆盖。

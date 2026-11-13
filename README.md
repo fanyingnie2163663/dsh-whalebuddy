@@ -6,7 +6,7 @@
 
 **设计取向**：灵感与适配方向取自 **superagent** —— 让智能体长期在线、主动接活，而不是等你开口才开始。Whalebuddy 把「同事」做成持续存在的执行单元：有档案、有记忆、能延续，换会话不换人。
 
-> **状态**：`v0.1.0`（P1a）。未上架 npm、未经安全审计；插件会在 `~/.dsh/whalebuddy` 下读写文件，并在 Web 服务上注册三条本机路由。
+> **状态**：`v0.1.0`（P1a）。未上架 npm、未经安全审计；插件会在 `~/.dsh/whalebuddy` 下读写文件，并在 Web 服务上注册五条本机路由。
 
 ## 目录
 
@@ -105,7 +105,7 @@ npm run test:coverage
 |---|---|
 | `fs:read` / `fs:write` | 读写信件目录下的 Markdown / JSON |
 | `system-prompt:write` | 注册一段开场记忆（`whalebuddy:memory`） |
-| `network:ingress` | 本机控制台的三条 HTTP 路由 |
+| `network:ingress` | 本机控制台的五条 HTTP 路由 |
 | `sessions:read` | 监听会话消息，供 `/collect` 提炼 |
 
 不发起网络请求、不调用 shell、不读凭据。记忆内容来自你的会话与手写文件，注入时会明确提醒模型「这是记忆，不是用户刚说的话」。

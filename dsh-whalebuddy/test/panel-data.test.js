@@ -4,7 +4,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createStore } from '../lib/store.js'
-import { bindWorkspace, buildPreview, isWritable, readColleague, readPanelState, saveFile } from '../lib/host/panel-data.js'
+import { bindWorkspace, buildPreview, changeAutonomy, isWritable, readColleague, readPanelState, saveFile } from '../lib/host/panel-data.js'
 
 async function seed() {
   const root = await mkdtemp(join(tmpdir(), 'whalebuddy-panel-'))
@@ -94,4 +94,39 @@ test('whitelist is exact, not a prefix match', () => {
 
 test('preview without a roster renders no roster heading', () => {
   assert.doesNotMatch(buildPreview({ profile: 'p' }), /### 同事/)
+})
+
+test('changing autonomy records the change and returns the whole panel', async () => {
+  const { store, slug } = await seed()
+  const out = await changeAutonomy(store, slug, 'L3')
+
+  assert.equal(out.updated.autonomy, 'L3')
+  assert.equal(out.selected, slug)
+  assert.equal(out.employees[0].autonomy, 'L3')
+  assert.match(out.colleague.files.profile, /- 档位：L3/)
+  assert.match(out.colleague.preview, /档位：L3/)
+  assert.match((await store.read(slug, 'memory/changelog.md')) ?? '', /控制台：档位 → L3/)
+})
+
+test('saving a profile whose autonomy line changed updates the snapshot and the index', async () => {
+  const { store, slug } = await seed()
+
+  // A level the console does not know must not be read as a prefix of one it does.
+  await saveFile(store, slug, 'profile.md', '# 逆戟\n- 岗位：视频\n- 档位：L10\n- 工作区：\n- 脾气：冷静\n')
+  assert.equal((await store.list())[0].autonomy, 'L2')
+
+  const out = await saveFile(store, slug, 'profile.md', '# 逆戟\n- 岗位：视频\n- 档位：L1\n- 工作区：\n- 脾气：冷静\n')
+
+  assert.equal(out.employees[0].autonomy, 'L1')
+  assert.equal((await store.list())[0].autonomy, 'L1')
+  const state = JSON.parse((await store.read(slug, 'state.json')) ?? '{}')
+  assert.equal(state.autonomy, 'L1')
+  assert.match(out.preview, /档位：L1/)
+})
+
+test('changing autonomy refuses a level it does not know', async () => {
+  const { store, slug } = await seed()
+
+  await assert.rejects(() => changeAutonomy(store, slug, 'L9'), /autonomy/)
+  assert.equal((await store.list())[0].autonomy, 'L2')
 })

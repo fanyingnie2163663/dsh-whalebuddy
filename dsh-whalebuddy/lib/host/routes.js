@@ -12,12 +12,13 @@
  *
  * @module dsh-whalebuddy/host/routes
  */
-import { bindWorkspace, isWritable, readPanelState, saveFile } from './panel-data.js'
+import { bindWorkspace, changeAutonomy, isWritable, readPanelState, saveFile } from './panel-data.js'
 
 /** Route paths, shared by the mount code and the tests. */
 export const ROUTES = Object.freeze({
   state: '/api/whalebuddy/state',
   save: '/api/whalebuddy/save',
+  update: '/api/whalebuddy/update',
   create: '/api/whalebuddy/create',
   assign: '/api/whalebuddy/assign',
 })
@@ -206,6 +207,20 @@ function guard(allow, req, res, method) {
 }
 
 /**
+ * The host's workspace list, or an empty list when it is missing or throws:
+ * the console renders without it either way.
+ * @param {(() => Array<{id: string, title: string, path: string}>) | undefined} listWorkspaces
+ * @returns {Array<{id: string, title: string, path: string}>}
+ */
+function workspacesOf(listWorkspaces) {
+  try {
+    return typeof listWorkspaces === 'function' ? listWorkspaces() ?? [] : []
+  } catch {
+    return []
+  }
+}
+
+/**
  * @typedef {object} PanelRouteOptions
  * @property {import('../store.js').Store} store
  * @property {(request: import('node:http').IncomingMessage) => boolean} [allow]
@@ -236,13 +251,7 @@ export function createPanelRoutes({ store, allow, onCreate, logger, listWorkspac
         if (!guard(permitted, req, res, 'GET')) return
         try {
           const slug = requestUrl(req).searchParams.get('slug') ?? ''
-          let workspaces = []
-          try {
-            workspaces = typeof listWorkspaces === 'function' ? listWorkspaces() ?? [] : []
-          } catch {
-            workspaces = []
-          }
-          writeJson(res, 200, { ...(await readPanelState(store, slug)), workspaces })
+          writeJson(res, 200, { ...(await readPanelState(store, slug)), workspaces: workspacesOf(listWorkspaces) })
         } catch (error) {
           fail(res, error)
         }
@@ -292,6 +301,45 @@ export function createPanelRoutes({ store, allow, onCreate, logger, listWorkspac
 
         try {
           writeJson(res, 200, await saveFile(store, slug, rel, text))
+        } catch (error) {
+          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: ROUTES.update,
+      async handler(req, res) {
+        if (!guard(permitted, req, res, 'POST')) return
+        const body = await readJsonObject(req, res)
+        if (body === undefined) return
+
+        const slug = textOf(body.slug)
+        const autonomy = textOf(body.autonomy).toUpperCase()
+        if (slug === '') {
+          writeJson(res, 400, { error: 'slug is required' })
+          return
+        }
+        if (autonomy !== 'L1' && autonomy !== 'L2' && autonomy !== 'L3') {
+          writeJson(res, 400, { error: 'autonomy must be L1, L2 or L3' })
+          return
+        }
+
+        let employees
+        try {
+          employees = await store.list()
+        } catch (error) {
+          fail(res, error)
+          return
+        }
+        if (!employees.some((employee) => employee.slug === slug)) {
+          writeJson(res, 404, { error: `no colleague named "${slug}"` })
+          return
+        }
+
+        try {
+          const panel = await changeAutonomy(store, slug, autonomy)
+          writeJson(res, 200, { ...panel, workspaces: workspacesOf(listWorkspaces) })
         } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }

@@ -43,15 +43,15 @@ async function fakeProfileContext(sink) {
   return { ctx, config: { dataDir }, cleanup: () => consoleCleanup?.() }
 }
 
-test('the profile-level load mounts all four console routes', async () => {
+test('the profile-level load mounts all five console routes', async () => {
   const sink = { routes: [], released: [], warnings: [] }
   const { ctx, config } = await fakeProfileContext(sink)
   await plugin.apply(ctx, config)
 
-  assert.equal(sink.routes.length, 4)
+  assert.equal(sink.routes.length, 5)
   assert.deepEqual(
     sink.routes.map((route) => route.path).sort(),
-    [ROUTES.assign, ROUTES.create, ROUTES.save, ROUTES.state].sort(),
+    [ROUTES.assign, ROUTES.create, ROUTES.save, ROUTES.state, ROUTES.update].sort(),
   )
   for (const route of sink.routes) {
     assert.equal(route.kind, 'exact')
@@ -86,8 +86,8 @@ test('unloading the plugin releases every console route', async () => {
   await plugin.apply(ctx, config)
 
   cleanup()
-  assert.equal(sink.released.length, 4)
-  assert.deepEqual(sink.released.sort(), [ROUTES.assign, ROUTES.create, ROUTES.save, ROUTES.state].sort())
+  assert.equal(sink.released.length, 5)
+  assert.deepEqual(sink.released.sort(), [ROUTES.assign, ROUTES.create, ROUTES.save, ROUTES.state, ROUTES.update].sort())
 })
 
 test('a colleague-scoped load never mounts the console', async () => {

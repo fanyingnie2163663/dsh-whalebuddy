@@ -227,6 +227,53 @@ test('create records the preset and autonomy snapshot', async () => {
   assert.deepEqual(state, { presetId: 'coder', autonomy: 'L3' })
 })
 
+test('setAutonomy rewrites the profile line and the state snapshot', async () => {
+  const dir = await root()
+  const store = createStore(dir)
+  const created = await store.create(input({ presetId: 'coder', autonomy: 'L2' }))
+  const updated = await store.setAutonomy(created.slug, 'L3')
+
+  assert.equal(updated.autonomy, 'L3')
+  const profile = await readFile(join(dir, created.slug, 'profile.md'), 'utf8')
+  assert.match(profile, /- 档位：L3/)
+  assert.doesNotMatch(profile, /档位：L2/)
+  const state = JSON.parse(await readFile(join(dir, created.slug, 'state.json'), 'utf8'))
+  assert.deepEqual(state, { presetId: 'coder', autonomy: 'L3' })
+  assert.equal((await store.list())[0].autonomy, 'L3')
+})
+
+test('setAutonomy rebuilds a missing state file instead of leaving it behind', async () => {
+  const dir = await root()
+  const store = createStore(dir)
+  const created = await store.create(input({ presetId: 'default', autonomy: 'L2' }))
+  await rm(join(dir, created.slug, 'state.json'))
+
+  await store.setAutonomy(created.slug, 'L1')
+
+  // presetId lived only in the snapshot; with it gone the level still lands.
+  const state = JSON.parse(await readFile(join(dir, created.slug, 'state.json'), 'utf8'))
+  assert.deepEqual(state, { presetId: '', autonomy: 'L1' })
+})
+
+test('setAutonomy refuses a level it does not know and changes nothing', async () => {
+  const dir = await root()
+  const store = createStore(dir)
+  const created = await store.create(input({ autonomy: 'L2' }))
+
+  await assert.rejects(() => store.setAutonomy(created.slug, 'L9'), /autonomy/)
+  assert.match(await readFile(join(dir, created.slug, 'profile.md'), 'utf8'), /- 档位：L2/)
+  const state = JSON.parse(await readFile(join(dir, created.slug, 'state.json'), 'utf8'))
+  assert.equal(state.autonomy, 'L2')
+})
+
+test('setAutonomy refuses a colleague that does not exist', async () => {
+  const dir = await root()
+  const store = createStore(dir)
+
+  await assert.rejects(() => store.setAutonomy('ghost', 'L1'), /ghost/)
+  await assert.rejects(stat(join(dir, 'ghost')))
+})
+
 test('default names carry a temperament', async () => {
   const { DEFAULT_NAMES } = await import('../lib/names.js')
   assert.deepEqual(DEFAULT_NAMES.map(n => n.name), ['小白', '逆戟', '座头', '一角', '蓝鲸'])

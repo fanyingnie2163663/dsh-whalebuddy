@@ -65,7 +65,11 @@
 |---|---|---|
 | GET | `/whalebuddy/state?slug=` | 同事列表 + 该同事的五个文件 + roster 全文 |
 | POST | `/whalebuddy/save` | `{slug, rel, text}` → 写入并返回新的注入预览 |
+| POST | `/whalebuddy/update` | `{slug, autonomy}` → 改档位，写 profile.md 与 state.json，返回刷新后的面板 |
+| POST | `/whalebuddy/assign` | `{slug, workspaceId}` → 把工作区路径写进档案并返回新预览 |
 | POST | `/whalebuddy/create` | `{name, role, autonomy, temperament}` → 建人 |
+
+档位不是一次性选择：档案页的主动性卡点 L1/L2/L3 即调，走 `update` 路由；`profile.md` 的「档位」行与 `state.json` 的快照同时改写，索引随之刷新（`store.setAutonomy`），变更记进 changelog。反过来，保存「档案原文」时若「档位」行变了，`saveFile` 也会把快照与索引对齐，两个入口不会各说各话。
 
 `rel` 白名单：`profile.md`、`memory/hot.md`、`memory/rapport.md`、`memory/knowledge.md`、`memory/tasks.json`、`_shared/roster.md`（`_shared` 用固定 slug）。
 路径校验复用 `store.employeeFile`（它已经挡了 `..` 和 `/`）。超长：单文件 64 KB 上限。

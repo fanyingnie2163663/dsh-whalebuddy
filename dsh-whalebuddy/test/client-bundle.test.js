@@ -147,6 +147,27 @@ async function okFetch(url, init) {
       if (url.includes('/assign')) {
         return { saved: true, bound: ['C:/work/a'], preview: '### 身份\n# 逆戟\n- 工作区：C:/work/a' }
       }
+      if (url.includes('/update')) {
+        return {
+          updated: { slug: 'niji', name: '逆戟', role: '视频', autonomy: 'L3', updatedAt: 3 },
+          employees: [
+            { slug: 'niji', name: '逆戟', role: '视频', autonomy: 'L3', updatedAt: 3 },
+            { slug: 'yijiao', name: '一角', role: '美术', autonomy: 'L2', updatedAt: 2 },
+          ],
+          selected: 'niji',
+          colleague: {
+            slug: 'niji',
+            files: {
+              ...PANEL_STATE.colleague.files,
+              profile: '# 逆戟\n- 岗位：视频\n- 档位：L3',
+              changelog: '- [2026-11-14 01:00] 控制台：档位 → L3',
+            },
+            bound: [],
+            preview: '### 身份\n# 逆戟\n- 档位：L3',
+          },
+          workspaces: PANEL_STATE.workspaces,
+        }
+      }
       return url.includes('/save') ? { saved: true, preview: '### 身份\n# 逆戟\n- 岗位：视频\n### 同事' } : PANEL_STATE
     },
   }
@@ -160,7 +181,7 @@ okFetch.calls = []
  */
 function mountPlugin(options = {}) {
   okFetch.calls = []
-  const bundle = loadBundle(okFetch, options.window)
+  const bundle = loadBundle(options.fetch ?? okFetch, options.window)
   const react = fakeReact()
   const plugin = bundle.factory((specifier) => {
     assert.equal(specifier, 'react')
@@ -299,6 +320,88 @@ test('the save button posts the edited surface and adopts the returned preview',
   const updated = react.render(Page)
   const preview = findAll(updated, (node) => node.props?.className === 'wb-pre')[0]
   assert.match(textOf(preview), /### 同事/)
+})
+
+test('a profile save that changes the level refreshes the dossier chip', async () => {
+  const fetchImpl = async (url, init) => {
+    fetchImpl.calls.push({ url, init })
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        if (url.includes('/save')) {
+          return {
+            saved: true,
+            bound: [],
+            preview: '### 身份\n# 逆戟\n- 档位：L1',
+            employees: [
+              { slug: 'niji', name: '逆戟', role: '视频', autonomy: 'L1', updatedAt: 4 },
+              { slug: 'yijiao', name: '一角', role: '美术', autonomy: 'L2', updatedAt: 2 },
+            ],
+          }
+        }
+        return PANEL_STATE
+      },
+    }
+  }
+  fetchImpl.calls = []
+
+  const { registered, react } = mountPlugin({ fetch: fetchImpl })
+  const Page = registered[1].component
+  react.render(Page)
+  await new Promise((resolve) => setImmediate(resolve))
+  let tree = react.render(Page)
+
+  const editButton = findAll(tree, (node) => node.type === 'button' && textOf(node) === '编辑')[0]
+  assert.ok(editButton, 'the profile card offers an editor')
+  editButton.props.onClick()
+  tree = react.render(Page)
+
+  const textarea = findAll(tree, (node) => node.type === 'textarea')[0]
+  textarea.props.onChange({ target: { value: '# 逆戟\n- 岗位：视频\n- 档位：L1' } })
+  tree = react.render(Page)
+
+  const saveButton = findAll(tree, (node) => node.type === 'button' && textOf(node) === '保存')[0]
+  saveButton.props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 10))
+
+  const save = fetchImpl.calls.find((entry) => entry.url === 'api/whalebuddy/save')
+  assert.ok(save, 'the edited profile is posted')
+  assert.match(JSON.parse(save.init.body).text, /档位：L1/)
+
+  tree = react.render(Page)
+  const chip = findAll(tree, (node) => node.props?.className === 'wb-chip' && /L1/.test(textOf(node)))[0]
+  assert.ok(chip, 'the dossier chip follows the saved profile level')
+})
+
+test('picking another autonomy level posts to the update route and adopts the answer', async () => {
+  const { registered, react } = mountPlugin()
+  const Page = registered[1].component
+
+  react.render(Page)
+  await new Promise((resolve) => setImmediate(resolve))
+  let tree = react.render(Page)
+
+  const levels = findAll(tree, (node) => node.type === 'button' && node.props?.className === 'wb-level')
+  assert.equal(levels.length, 3, 'all three levels are offered')
+  assert.equal(levels.filter((node) => node.props['data-on'] !== undefined).length, 1, 'exactly one level is current')
+  assert.match(textOf(levels.find((node) => node.props['data-on'] !== undefined)), /L2/)
+
+  const l3 = levels.find((node) => /L3/.test(textOf(node)))
+  assert.ok(l3, 'L3 is offered')
+  l3.props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 10))
+
+  const call = okFetch.calls.find((entry) => entry.url === 'api/whalebuddy/update')
+  assert.ok(call, 'changing a level posts to the update route')
+  assert.equal(call.init.method, 'POST')
+  assert.deepEqual(JSON.parse(call.init.body), { slug: 'niji', autonomy: 'L3' })
+
+  tree = react.render(Page)
+  const chip = findAll(tree, (node) => node.props?.className === 'wb-chip' && /L3/.test(textOf(node)))[0]
+  assert.ok(chip, 'the dossier chip follows the new level')
+  const active = findAll(tree, (node) => node.type === 'button' && node.props?.className === 'wb-level' && node.props['data-on'] !== undefined)
+  assert.match(textOf(active[0]), /L3/)
 })
 
 test('switching colleagues warns when another surface still has unsaved work', async () => {

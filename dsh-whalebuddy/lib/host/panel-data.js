@@ -34,6 +34,19 @@ const CHANGELOG_VIEW_LIMIT = 16 * 1024
 /** The profile line holding the comma-separated workspace paths. */
 const WORKSPACE_LINE = /^-[ \t]*工作区[:：][ \t]*(.*)$/m
 
+/** The profile line the raw editor can also use to change the level. */
+const AUTONOMY_LINE = /^-[ \t]*档位[:：][ \t]*(L[123])(?![0-9])/m
+
+/**
+ * The autonomy level written in a profile, when it is one the console knows.
+ * @param {string} [profile]
+ * @returns {'L1' | 'L2' | 'L3' | undefined}
+ */
+function profileAutonomy(profile) {
+  const match = AUTONOMY_LINE.exec(typeof profile === 'string' ? profile : '')
+  return match === null ? undefined : /** @type {'L1' | 'L2' | 'L3'} */ (match[1])
+}
+
 /**
  * Parse the workspace paths recorded in one profile.
  * @param {string} [profile]
@@ -133,7 +146,7 @@ export async function readPanelState(store, slug) {
  * @param {string} slug
  * @param {string} rel
  * @param {string} text
- * @returns {Promise<{saved: true, bound: string[], preview: string}>}
+ * @returns {Promise<{saved: true, bound: string[], preview: string, employees: import('../store.js').EmployeeSummary[]}>}
  */
 export async function saveFile(store, slug, rel, text) {
   if (!isWritable(rel)) throw new Error(`refused: ${rel} is not a console-editable file`)
@@ -143,9 +156,34 @@ export async function saveFile(store, slug, rel, text) {
   const targetSlug = sharedTarget ? SHARED_SLUG : slug
   const targetRel = sharedTarget ? rel.slice('_shared/'.length) : rel
   await store.write(targetSlug, targetRel, text)
+
+  // The raw editor can change the level too; without this the profile would say
+  // L1 while the state snapshot (and so the chip) still said L2.
+  if (!sharedTarget && rel === 'profile.md') {
+    const level = profileAutonomy(text)
+    const current = (await store.list()).find((employee) => employee?.slug === slug)
+    if (level !== undefined && current !== undefined && current.autonomy !== level) {
+      await store.setAutonomy(slug, level)
+    }
+  }
+
   if (!sharedTarget) await appendChange(store, slug, '控制台', `${rel}（${text.length} 字）`)
   const colleague = await readColleague(store, slug)
-  return { saved: true, bound: colleague.bound, preview: colleague.preview }
+  return { saved: true, bound: colleague.bound, preview: colleague.preview, employees: await store.list() }
+}
+
+/**
+ * Change one colleague's autonomy level, record the change, and hand back the
+ * fresh panel payload so the console can adopt the new state in one trip.
+ * @param {import('../store.js').Store} store
+ * @param {string} slug
+ * @param {'L1' | 'L2' | 'L3'} autonomy
+ * @returns {Promise<{updated: import('../store.js').EmployeeSummary, employees: import('../store.js').EmployeeSummary[], selected: string, colleague: Awaited<ReturnType<typeof readColleague>> | null}>}
+ */
+export async function changeAutonomy(store, slug, autonomy) {
+  const updated = await store.setAutonomy(slug, autonomy)
+  await appendChange(store, slug, '控制台', `档位 → ${autonomy}`)
+  return { updated, ...(await readPanelState(store, slug)) }
 }
 
 /**

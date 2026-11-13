@@ -283,6 +283,66 @@ test('create without a name answers 400', async () => {
   }
 })
 
+test('update changes the autonomy and answers with the refreshed panel', async () => {
+  const { store, slug } = await seed()
+  const server = await mount(createPanelRoutes({ store, listWorkspaces: () => [] }))
+  try {
+    const answer = await call(server.base, ROUTES.update, {
+      method: 'POST',
+      body: { slug, autonomy: 'L3' },
+    })
+    assert.equal(answer.status, 200)
+    assert.equal(answer.body.updated.autonomy, 'L3')
+    assert.equal(answer.body.selected, slug)
+    assert.equal(answer.body.employees[0].autonomy, 'L3')
+    assert.match(answer.body.colleague.files.profile, /- 档位：L3/)
+    assert.match(answer.body.colleague.preview, /档位：L3/)
+    assert.deepEqual(answer.body.workspaces, [])
+    assert.match((await store.read(slug, 'state.json')) ?? '', /"autonomy": "L3"/)
+  } finally {
+    await server.close()
+  }
+})
+
+test('update refuses an unknown level with 400', async () => {
+  const { store, slug } = await seed()
+  const server = await mount(createPanelRoutes({ store }))
+  try {
+    const answer = await call(server.base, ROUTES.update, {
+      method: 'POST',
+      body: { slug, autonomy: 'L9' },
+    })
+    assert.equal(answer.status, 400)
+  } finally {
+    await server.close()
+  }
+})
+
+test('update refuses a colleague that does not exist with 404', async () => {
+  const { store } = await seed()
+  const server = await mount(createPanelRoutes({ store }))
+  try {
+    const answer = await call(server.base, ROUTES.update, {
+      method: 'POST',
+      body: { slug: 'ghost', autonomy: 'L1' },
+    })
+    assert.equal(answer.status, 404)
+  } finally {
+    await server.close()
+  }
+})
+
+test('update rejects the wrong method with 405', async () => {
+  const { store } = await seed()
+  const server = await mount(createPanelRoutes({ store }))
+  try {
+    const answer = await call(server.base, ROUTES.update)
+    assert.equal(answer.status, 405)
+  } finally {
+    await server.close()
+  }
+})
+
 test('a refusing fence answers 403 before the handler runs', async () => {
   const { store } = await seed()
   const server = await mount(createPanelRoutes({ store, allow: () => false }))
