@@ -64,15 +64,29 @@ LICENSE
 
 ## 界面
 
-面板默认深色，右上角一键切浅色。下面是真实界面（`designs/` 里的画板与预览脚本不进仓库）：
+### 设计稿
 
-![创建同事](docs/assets/screenshots/create.png)
+最早的画板（`designs/` 里的源文件不进仓库）：
 
-![同事控制台](docs/assets/screenshots/presence.png)
+![设计稿 · 创建同事](docs/assets/screenshots/design/create.png)
 
-![记忆与出处](docs/assets/screenshots/detail.png)
+![设计稿 · 在场](docs/assets/screenshots/design/presence.png)
 
-![注入预览](docs/assets/screenshots/preview.png)
+![设计稿 · 详情](docs/assets/screenshots/design/detail.png)
+
+---
+
+### 真实界面
+
+面板默认深色，右上角一键切浅色：
+
+![真实 · 创建同事](docs/assets/screenshots/ui/create.png)
+
+![真实 · 同事控制台](docs/assets/screenshots/ui/presence.png)
+
+![真实 · 记忆与出处](docs/assets/screenshots/ui/detail.png)
+
+![真实 · 注入预览](docs/assets/screenshots/ui/preview.png)
 
 ## 开发
 
