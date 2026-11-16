@@ -1,8 +1,8 @@
 {
   "name": "@fanyingnie/dsh-whalebuddy",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
-  "description": "Whalebuddy：给 DeepSeek Harness 带来有档案、有默契、能延续的同事。",
+  "description": "同事记忆插件：给 DeepSeek Harness 带来有档案、有默契、能延续的同事 —— 开场注入记忆，收工写回待办与日志。",
   "license": "MIT",
   "author": "聂凡瑛 <fanyingnie@gmail.com>",
   "type": "module",
@@ -19,14 +19,19 @@
     "deepseek-harness",
     "dsh-plugin",
     "colleague",
-    "memory"
+    "memory",
+    "agent-memory",
+    "context-injection",
+    "presets",
+    "session-memory"
   ],
   "files": [
     "lib",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
-    "README.md"
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "engines": {
     "node": ">=24.9.0",

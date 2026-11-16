@@ -4,9 +4,11 @@
 
 一个同事 = 一份 DSH 预设（岗位）+ 一个记忆目录（人）。开新会话时她把档案、默契、待办和近况带回上下文；收工时把这次共事里值得留下的写回文件。记忆是可读、可改、可拷走的 Markdown / JSON。
 
+> **独立社区项目**：本项目不是 DeepSeek 官方产品，与 DeepSeek 无隶属或背书关系；与 npm 上的 `dsh-whale-buddy`（鲸鱼动画插件）也没有关联。详见 [THIRD_PARTY_NOTICES.md](dsh-whalebuddy/THIRD_PARTY_NOTICES.md)。
+
 **设计取向**：灵感与适配方向取自 **superagent** —— 让智能体长期在线、主动接活，而不是等你开口才开始。Whalebuddy 把「同事」做成持续存在的执行单元：有档案、有记忆、能延续，换会话不换人。
 
-> **状态**：`v0.1.0`（P1a）。未上架 npm、未经安全审计；插件会在 `~/.dsh/whalebuddy` 下读写文件，并在 Web 服务上注册七条本机路由。
+> **状态**：`v0.1.1`（P1a）。已发布到 npm（`@fanyingnie/dsh-whalebuddy`），未经安全审计；插件会在 `~/.dsh/whalebuddy` 下读写文件，并在 Web 服务上注册七条本机路由。
 
 ## 目录
 
