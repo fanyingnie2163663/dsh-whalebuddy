@@ -1,7 +1,7 @@
 {
-  "name": "dsh-whalebuddy",
+  "name": "@fanyingnie/dsh-whalebuddy",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "description": "Whalebuddy：给 DeepSeek Harness 带来有档案、有默契、能延续的同事。",
   "license": "MIT",
   "author": "聂凡瑛 <fanyingnie@gmail.com>",

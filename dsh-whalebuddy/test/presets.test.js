@@ -8,7 +8,7 @@ test('preset carries the employee slug in its own row', () => {
   const def = buildPresetDefinition(emp, [{ id: 'base', name: 'some-base-plugin' }])
   assert.equal(def.id, 'whalebuddy:小白')
   assert.equal(def.name, '小白')
-  const own = def.plugins.find(r => r.name === 'dsh-whalebuddy')
+  const own = def.plugins.find(r => r.name === '@fanyingnie/dsh-whalebuddy')
   assert.deepEqual(own.config, { employee: '小白' })
   assert.equal(def.plugins[0].name, 'some-base-plugin')
 })
@@ -16,18 +16,18 @@ test('preset carries the employee slug in its own row', () => {
 test('a template row from another colleague never doubles the memory section', () => {
   const rows = [
     { id: 'base', name: 'some-base-plugin' },
-    { id: 'whalebuddy-memory', name: 'dsh-whalebuddy', config: { employee: '逆戟' } },
+    { id: 'whalebuddy-memory', name: '@fanyingnie/dsh-whalebuddy', config: { employee: '逆戟' } },
   ]
   const def = buildPresetDefinition(emp, rows)
-  const own = def.plugins.filter((row) => row.name === 'dsh-whalebuddy')
+  const own = def.plugins.filter((row) => row.name === '@fanyingnie/dsh-whalebuddy')
   assert.equal(own.length, 1)
   assert.deepEqual(own[0].config, { employee: '小白' })
-  assert.deepEqual(def.plugins.map((row) => row.name), ['some-base-plugin', 'dsh-whalebuddy'])
+  assert.deepEqual(def.plugins.map((row) => row.name), ['some-base-plugin', '@fanyingnie/dsh-whalebuddy'])
 })
 
 test('a custom data root rides along in the preset row', () => {
   const def = buildPresetDefinition(emp, [], 'D:/colleagues')
-  const own = def.plugins.find(r => r.name === 'dsh-whalebuddy')
+  const own = def.plugins.find(r => r.name === '@fanyingnie/dsh-whalebuddy')
   assert.deepEqual(own.config, { employee: '小白', dataDir: 'D:/colleagues' })
 })
 

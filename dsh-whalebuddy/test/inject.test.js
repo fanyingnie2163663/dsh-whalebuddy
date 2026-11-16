@@ -181,7 +181,7 @@ test('a custom dataDir reaches the preset-scoped instance', async () => {
   })
   await apply(profile.ctx, { dataDir: root })
 
-  const own = registrations[0].plugins.find((row) => row.name === 'dsh-whalebuddy')
+  const own = registrations[0].plugins.find((row) => row.name === '@fanyingnie/dsh-whalebuddy')
   assert.equal(own.config.dataDir, root)
 
   // Load the scoped copy exactly as the preset would, while the harness home

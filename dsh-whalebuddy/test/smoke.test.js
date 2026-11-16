@@ -13,7 +13,7 @@ test('plugin module has the Cordis shape', () => {
 
 test('manifest declares the DSH line and the surfaces it uses', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-  assert.equal(pkg.private, true)
+  assert.equal(pkg.private, false)
   assert.equal(pkg.license, 'MIT')
   assert.equal(pkg.dsh.manifestVersion, 1)
   assert.equal(pkg.dsh.kind, 'plugin')

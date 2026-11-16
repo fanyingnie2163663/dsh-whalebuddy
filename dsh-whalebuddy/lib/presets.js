@@ -78,7 +78,7 @@ function parsePresetDocument(content) {
 const MEMORY_PLUGIN_ID = 'whalebuddy-memory'
 
 const PRESET_ID_PREFIX = 'whalebuddy:'
-const OWN_PLUGIN_NAME = 'dsh-whalebuddy'
+const OWN_PLUGIN_NAME = '@fanyingnie/dsh-whalebuddy'
 
 /**
  * @param {unknown} error

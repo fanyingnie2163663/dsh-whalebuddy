@@ -2,4 +2,4 @@
 # The Client half is resolved from the dsh.client manifest, so it needs no row here.
 - insert:
     - id: whalebuddy
-      name: dsh-whalebuddy
+      name: '@fanyingnie/dsh-whalebuddy'

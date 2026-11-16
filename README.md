@@ -34,11 +34,11 @@ LICENSE
    ```jsonc
    {
      "dependencies": {
-       "dsh-whalebuddy": "link:<clone 路径>/dsh-whalebuddy"
+       "@fanyingnie/dsh-whalebuddy": "link:<clone 路径>/dsh-whalebuddy"
      },
      "dsh": {
        "profile": {
-         "bundles": ["…", "dsh-whalebuddy"]
+         "bundles": ["…", "@fanyingnie/dsh-whalebuddy"]
        }
      }
    }
