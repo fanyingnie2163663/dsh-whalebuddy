@@ -1,6 +1,6 @@
 {
   "name": "@fanyingnie/dsh-whalebuddy",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": false,
   "description": "同事记忆插件：给 DeepSeek Harness 带来有档案、有默契、能延续的同事 —— 开场注入记忆，收工写回待办与日志。",
   "license": "MIT",
