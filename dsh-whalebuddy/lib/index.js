@@ -9,6 +9,7 @@ import { createPanelRoutes, isConsoleRequestAllowed, ROUTES } from './host/route
 import { assembleMemory } from './inject.js'
 import { DEFAULT_NAMES } from './names.js'
 import { NOTICE_FILE, appendWithinCap, collectNotice, noticeCapFromState, parseNotices } from './notices.js'
+import { compileRows, compileToolDeny, describeToolSurface, loadPacks, normalizeKit, suggestKit } from './packs.js'
 import { registerEmployeePresets, resolveTemplateRows } from './presets.js'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { assignWorkspace, canAssign } from './assign.js'
@@ -39,6 +40,9 @@ import { createStore } from './store.js'
  * @typedef {object} EmployeeCommandOptions
  * @property {(employee: EmployeeSummary) => Promise<void>} [onCreated]
  * @property {*} [logger]
+ * @property {Map<string, import('./packs.js').Pack>} [packs]
+ * @property {(slug: string) => Promise<string[]>} [readKit]
+ * @property {(slug: string, kit: string[]) => Promise<string[]>} [writeKit]
  */
 
 export const name = 'dsh-whalebuddy'
@@ -49,12 +53,18 @@ export const Config = Schema.object({
   // Set by a colleague preset (`config: { employee: '<slug>' }`); empty on the
   // profile-level load, which owns the command and the preset registry.
   employee: Schema.string().default(''),
+  // Global tools this colleague's kit must hide; computed by the profile-level
+  // load at registration time and applied by this preset-scoped copy.
+  toolDeny: Schema.array(Schema.string()).default([]),
+  // Human-readable "what this kit issues / withholds" block, built by the
+  // profile-level load and injected as a prompt section by this scoped copy.
+  toolSurface: Schema.string().default(''),
 })
 
 const COMMAND_NAME = 'colleague'
 const COMMAND_DESCRIPTION = '创建或列出同事'
-const COMMAND_HINT = 'new <名字> | ls'
-const USAGE = '用法：/colleague new <名字> | ls'
+const COMMAND_HINT = 'new <名字> | ls | kit [<slug> [set|add|rm|reset <包,...>]]'
+const USAGE = '用法：/colleague new <名字> | ls | kit [<slug> [set|add|rm|reset <包,...>]]'
 const MISSING_NAME = '给个名字：/colleague new 小白'
 const EMPTY_LIST = '还没有同事：/colleague new 小白'
 const UNNAMED_ROLE = '未定'
@@ -62,6 +72,8 @@ const DEFAULT_AUTONOMY = 'L2'
 const DATA_DIR_NAME = 'whalebuddy'
 /** The prompt section a preset-scoped instance owns. */
 const MEMORY_SECTION_NAME = 'whalebuddy:memory'
+/** The prompt section that tells a colleague which tools her kit issued. */
+const TOOL_SURFACE_SECTION_NAME = 'whalebuddy:tools'
 /** Cut-in slot when the harness cannot order `HARNESS_IDENTITY`. */
 const FALLBACK_MEMORY_ORDER = 1000
 /** Keep `_startup.log` bounded; it is diagnostics, not history. */
@@ -179,6 +191,15 @@ export function createEmployeeCommand(store, options = {}) {
         }
       }
 
+      const kit = /^kit(?:\s+([\s\S]*))?$/i.exec(rawInput)
+      if (kit) {
+        try {
+          return await handleKit(store, (kit[1] ?? '').trim(), options)
+        } catch (error) {
+          return { kind: 'error', text: '工具箱操作失败：' + describeError(error) }
+        }
+      }
+
       return { kind: 'error', text: USAGE }
     },
   }
@@ -196,6 +217,77 @@ async function listEmployees(store) {
     return `${employee.slug} · ${role} · ${employee.autonomy}`
   })
   return { kind: 'success', text: lines.join('\n') }
+}
+
+/**
+ * Read one colleague's kit: an explicit state list, or the role suggestion.
+ * @param {Store} store
+ * @param {EmployeeSummary} employee
+ * @param {Map<string, import('./packs.js').Pack>} packs
+ * @param {EmployeeCommandOptions} [options]
+ * @returns {Promise<string[]>}
+ */
+async function readKitOf(store, employee, packs, options = {}) {
+  if (typeof options.readKit === 'function') return options.readKit(employee.slug)
+  const state = await store.state(employee.slug)
+  return normalizeKit(state.kit ?? suggestKit(employee.role), packs)
+}
+
+/**
+ * `/colleague kit`: list, inspect, or edit the capability packs a colleague
+ * carries into her next session. The current session keeps its composition —
+ * DSH locks a preset after the first turn.
+ * @param {Store} store
+ * @param {string} input
+ * @param {EmployeeCommandOptions} [options]
+ * @returns {Promise<CommandResult>}
+ */
+async function handleKit(store, input, options = {}) {
+  const packs = options.packs
+  if (!packs || typeof packs.values !== 'function') {
+    return { kind: 'error', text: '能力包没有加载，暂时无法调整工具箱' }
+  }
+  const employees = await store.list()
+  if (employees.length === 0) return { kind: 'success', text: EMPTY_LIST }
+
+  const parts = input.split(/\s+/).filter((part) => part !== '')
+  const [slug, action] = parts
+  const value = parts.slice(2).join(',')
+
+  if (slug === undefined) {
+    const lines = []
+    for (const employee of employees) {
+      const kit = await readKitOf(store, employee, packs, options)
+      lines.push(employee.slug + ' · ' + kit.join(', '))
+    }
+    return { kind: 'success', text: '同事工具箱：\n' + lines.join('\n') + '\n用 /colleague kit <slug> set|add|rm <包,...> 调整。' }
+  }
+
+  const employee = employees.find((entry) => entry.slug === slug || entry.name === slug)
+  if (employee === undefined) return { kind: 'error', text: '没有这位同事：' + slug }
+  const current = await readKitOf(store, employee, packs, options)
+  if (action === undefined) {
+    return { kind: 'success', text: employee.slug + ' · ' + current.join(', ') }
+  }
+
+  const wanted = typeof value === 'string'
+    ? value.split(/[,，]/).map((id) => id.trim()).filter((id) => id !== '')
+    : []
+  let next
+  if (action === 'set') next = wanted
+  else if (action === 'add') next = [...current, ...wanted]
+  else if (action === 'rm' || action === 'remove') next = current.filter((id) => !wanted.includes(id))
+  else if (action === 'reset') next = suggestKit(employee.role)
+  else return { kind: 'error', text: USAGE }
+
+  if (typeof options.writeKit !== 'function') {
+    return { kind: 'error', text: '当前无法写回工具箱' }
+  }
+  const saved = await options.writeKit(employee.slug, normalizeKit(next, packs))
+  return {
+    kind: 'success',
+    text: '已更新「' + employee.slug + '」工具箱：' + saved.join(', ') + '\n下次新会话生效。',
+  }
 }
 
 /**
@@ -492,7 +584,7 @@ export function createCollectCommand({ store, employee, queue, transcript, refre
  * skipped; otherwise every session of the colleague would register them again.
  * The section provider is synchronous, reads the cache, and never throws.
  * @param {*} ctx
- * @param {{ dataDir?: string, employee?: string }} config
+ * @param {{ dataDir?: string, employee?: string, toolDeny?: string[], toolSurface?: string }} config
  * @param {string} employee
  * @returns {Promise<void>}
  */
@@ -500,6 +592,7 @@ async function applyScoped(ctx, config, employee) {
   const root = resolveDataDir(ctx, config)
   const store = createStore(root)
   const systemPrompt = ctx?.systemPrompt
+  const toolSurface = typeof config?.toolSurface === 'string' ? config.toolSurface.trim() : ''
 
   let cached = ''
 
@@ -596,6 +689,20 @@ async function applyScoped(ctx, config, employee) {
     warn(ctx, `注册记忆段失败：${describeError(error)}`)
   }
 
+  // The tool surface is configuration, not memory: it changes when the kit
+  // changes, so it gets its own section right after the memory one.
+  if (toolSurface !== '') {
+    try {
+      systemPrompt.section({
+        name: TOOL_SURFACE_SECTION_NAME,
+        order: memorySectionOrder(ctx) + 1,
+        interpolate: false,
+        text: () => toolSurface,
+      })
+    } catch (error) {
+      warn(ctx, `注册工具面段失败：${describeError(error)}`)
+    }
+  }
 
   const actorProfile = (await store.read(employee, 'profile.md')) ?? ''
   if (typeof ctx.inject === 'function' && canAssign(actorProfile)) {
@@ -623,6 +730,25 @@ async function applyScoped(ctx, config, employee) {
       }
     })
   }
+
+  // The kit's tool gate: hide every global tool an unselected pack owns.
+  // tools.restrict() only accepts scoped contexts, which this preset-scoped
+  // copy is. Unknown names (a tool missing from this build) fail the call, so
+  // the whole gate fails open rather than locking the colleague out.
+  const toolDeny = Array.isArray(config?.toolDeny)
+    ? config.toolDeny.filter((name) => typeof name === 'string' && name !== '')
+    : []
+  if (toolDeny.length > 0 && typeof ctx.inject === 'function') {
+    ctx.inject(['tools'], (scope) => {
+      try {
+        if (typeof scope.tools?.restrict !== 'function') return
+        scope.tools.restrict({ deny: toolDeny })
+      } catch (error) {
+        warn(ctx, '应用工具箱限制失败：' + describeError(error))
+      }
+    })
+  }
+
   if (typeof ctx?.logger?.info === 'function') {
     ctx.logger.info('whalebuddy memory loaded (employee=%s, dataDir=%s)', employee, root)
   }
@@ -640,7 +766,7 @@ async function applyScoped(ctx, config, employee) {
  *   `index.json` only skips preset registration — it never fails the plugin
  *   load. Without an `agentPresets` service the command still works.
  * @param {*} ctx
- * @param {{ dataDir?: string, presetRows?: PresetRow[], employee?: string }} config
+ * @param {{ dataDir?: string, presetRows?: PresetRow[], employee?: string, toolDeny?: string[], toolSurface?: string }} config
  * @returns {Promise<void>}
  */
 export async function apply(ctx, config) {
@@ -654,8 +780,10 @@ export async function apply(ctx, config) {
   ctx.logger.info('whalebuddy loaded (dataDir=%s)', root)
   const store = createStore(root)
 
-  /** @type {Array<() => Promise<void>>} */
-  const disposers = []
+  /** @type {Map<string, () => Promise<void>>} */
+  const presetDisposers = new Map()
+  /** Last deny set registered per colleague; tool churn only re-registers changes. */
+  const denySignatures = new Map()
   /** @type {Promise<PresetRow[]> | undefined} */
   let templateRows
   /** @type {*} */
@@ -664,6 +792,56 @@ export async function apply(ctx, config) {
   let disposeEffectBound = false
 
   const resolveRowsOnce = () => (templateRows ??= resolveTemplateRows(presets, presetRowsOf(config)))
+
+  const packs = await loadPacks(root, ctx.logger)
+
+  /** Every global tool name this build knows; empty before the tools service is up. */
+  const knownToolNames = () => {
+    try {
+      const tools = typeof ctx.get === 'function' ? ctx.get('tools') : undefined
+      const view = tools && typeof tools.view === 'function' ? tools.view() : undefined
+      const names = view && view.restrictableNames
+      return names === undefined ? [] : [...names]
+    } catch {
+      return []
+    }
+  }
+
+  const kitFor = async (employee) => {
+    const state = await store.state(employee.slug)
+    return normalizeKit(state.kit ?? suggestKit(employee.role), packs)
+  }
+
+  const rowsFor = async (employee) =>
+    compileRows(await resolveRowsOnce(), packs, await kitFor(employee), {
+      skillsDir: join(root, employee.slug, 'skills'),
+    })
+
+  const toolDenyFor = async (employee) => compileToolDeny(packs, await kitFor(employee), knownToolNames())
+
+  /**
+   * Register one colleague's preset from her kit, replacing any older
+   * registration for the same slug. The registry keeps the old revision alive
+   * while an existing session uses it, so a kit change is safe mid-session.
+   * @param {EmployeeSummary} employee
+   * @returns {Promise<{ rows: number, deny: number }>}
+   */
+  const registerOne = async (employee) => {
+    if (!presets) return { rows: 0, deny: 0 }
+    const previous = presetDisposers.get(employee.slug)
+    if (previous !== undefined) {
+      await previous()
+      presetDisposers.delete(employee.slug)
+    }
+    const rows = await rowsFor(employee)
+    if (rows.length === 0) warn(ctx, NO_TEMPLATE_ROWS)
+    const toolDeny = await toolDenyFor(employee)
+    const toolSurface = describeToolSurface(packs, await kitFor(employee))
+    denySignatures.set(employee.slug, toolDeny.join('\u0000'))
+    const dispose = await registerEmployeePresets(presets, [employee], rows, ctx.logger, root, () => ({ toolDeny, toolSurface }))
+    presetDisposers.set(employee.slug, dispose)
+    return { rows: rows.length, deny: toolDeny.length }
+  }
 
   /**
    * Append one diagnostic line for the next startup post-mortem. Never throws.
@@ -692,7 +870,7 @@ export async function apply(ctx, config) {
    * @returns {Promise<void>}
    */
   const disposeAll = async () => {
-    for (const dispose of [...disposers].reverse()) {
+    for (const dispose of [...presetDisposers.values()].reverse()) {
       try {
         await dispose()
       } catch (error) {
@@ -720,13 +898,16 @@ export async function apply(ctx, config) {
    */
   const registerCreated = async (created) => {
     if (!presets) return
-    const rows = await resolveRowsOnce()
-    if (rows.length === 0) warn(ctx, NO_TEMPLATE_ROWS)
     try {
-      disposers.push(await registerEmployeePresets(presets, [created], rows, ctx.logger, root))
-      void note({ event: 'created', employee: created.slug, rows: rows.length })
+      const old = presetDisposers.get(created.slug)
+      if (old !== undefined) {
+        await old()
+        presetDisposers.delete(created.slug)
+      }
+      const summary = await registerOne(created)
+      void note({ event: 'created', employee: created.slug, rows: summary.rows, deny: summary.deny })
     } catch (error) {
-      warn(ctx, `注册「${created.slug}」的预设失败：${describeError(error)}`)
+      warn(ctx, '注册「' + created.slug + '」的预设失败：' + describeError(error))
       void note({ event: 'created-failed', employee: created.slug, error: describeError(error) })
     }
   }
@@ -740,7 +921,7 @@ export async function apply(ctx, config) {
     try {
       employees = await store.list()
     } catch (error) {
-      warn(ctx, `读取同事列表失败（${describeError(error)}），本次不注册同事预设`)
+      warn(ctx, '读取同事列表失败（' + describeError(error) + '），本次不注册同事预设')
       void note({ event: 'list-failed', error: describeError(error) })
       return
     }
@@ -750,16 +931,21 @@ export async function apply(ctx, config) {
       return
     }
 
-    const rows = await resolveRowsOnce()
-    if (rows.length === 0) warn(ctx, NO_TEMPLATE_ROWS)
-
-    try {
-      disposers.push(await registerEmployeePresets(presets, employees, rows, ctx.logger, root))
-      void note({ event: 'loaded', employees: employees.length, rows: rows.length })
-    } catch (error) {
-      warn(ctx, `注册同事预设失败：${describeError(error)}`)
-      void note({ event: 'loaded-failed', employees: employees.length, rows: rows.length, error: describeError(error) })
+    let maxRows = 0
+    let maxDeny = 0
+    let failed = 0
+    for (const employee of employees) {
+      try {
+        const summary = await registerOne(employee)
+        maxRows = Math.max(maxRows, summary.rows)
+        maxDeny = Math.max(maxDeny, summary.deny)
+      } catch (error) {
+        failed += 1
+        warn(ctx, '注册「' + employee.slug + '」的预设失败：' + describeError(error))
+        void note({ event: 'loaded-failed', employee: employee.slug, error: describeError(error) })
+      }
     }
+    void note({ event: 'loaded', employees: employees.length, maxRows, maxDeny, failed })
   }
 
   /**
@@ -808,6 +994,8 @@ export async function apply(ctx, config) {
           allow: (request) => isConsoleRequestAllowed(ctx, request),
           onCreate: (created) => registerCreated(created),
           logger: ctx.logger,
+          packs,
+          onKitChange: (slug, kit) => saveKitFor(slug, kit),
           listWorkspaces: () => {
             const registry = workspaceRegistry()
             if (!registry || typeof registry.list !== 'function') return []
@@ -849,9 +1037,99 @@ export async function apply(ctx, config) {
     bindDisposeEffect(ctx)
   }
 
+  /**
+   * Persist a kit and re-register that colleague's preset. Existing sessions
+   * keep the revision they started with; the next session picks up the new one.
+   * @param {string} slug
+   * @param {string[]} kit
+   * @returns {Promise<string[]>}
+   */
+  const saveKitFor = async (slug, kit) => {
+    const employees = await store.list()
+    const employee = employees.find((entry) => entry.slug === slug)
+    if (employee === undefined) throw new Error('no colleague named "' + slug + '"')
+    const saved = await store.setKit(slug, normalizeKit(kit, packs))
+    const old = presetDisposers.get(slug)
+    if (old !== undefined) {
+      await old()
+      presetDisposers.delete(slug)
+    }
+    await registerOne(employee)
+    try {
+      await appendChange(store, slug, '工具箱', saved.join('、'))
+    } catch {
+      // The kit is saved; a changelog failure must not undo it.
+    }
+    return saved
+  }
+
+  /**
+   * Tools register in bundle order: a colleague's preset can be registered
+   * before the browser/review/Office plugins have added their tools, which
+   * would leave those names out of her deny set. Every tools/change event
+   * recomputes each colleague's deny set and re-registers only the colleagues
+   * whose set actually moved, so the gate converges instead of freezing the
+   * surface seen at load. Debounced, serialized, and a no-op while unbound.
+   */
+  let gateChain = Promise.resolve()
+  const runGateRefresh = async () => {
+    if (presets === null) return
+    let employees
+    try {
+      employees = await store.list()
+    } catch {
+      return
+    }
+    for (const employee of employees) {
+      try {
+        const deny = await toolDenyFor(employee)
+        if (denySignatures.get(employee.slug) === deny.join('\u0000')) continue
+        const old = presetDisposers.get(employee.slug)
+        if (old !== undefined) {
+          await old()
+          presetDisposers.delete(employee.slug)
+        }
+        await registerOne(employee)
+        void note({ event: 'gate-refreshed', employee: employee.slug, deny: deny.length })
+      } catch (error) {
+        warn(ctx, '刷新「' + employee.slug + '」的工具门失败：' + describeError(error))
+      }
+    }
+  }
+  const refreshToolGates = () => {
+    gateChain = gateChain.then(runGateRefresh, runGateRefresh)
+    return gateChain
+  }
+
+  let gateTimer
+  const scheduleGateRefresh = () => {
+    if (gateTimer !== undefined) clearTimeout(gateTimer)
+    gateTimer = setTimeout(() => {
+      gateTimer = undefined
+      void refreshToolGates()
+    }, 150)
+  }
+  if (typeof ctx.on === 'function') {
+    ctx.effect(() => {
+      const off = ctx.on('tools/change', scheduleGateRefresh)
+      return () => {
+        if (gateTimer !== undefined) clearTimeout(gateTimer)
+        if (typeof off === 'function') off()
+      }
+    })
+  }
+
   const command = createEmployeeCommand(store, {
     onCreated: (created) => registerCreated(created),
     logger: ctx.logger,
+    packs,
+    readKit: async (slug) => {
+      const employees = await store.list()
+      const employee = employees.find((entry) => entry.slug === slug)
+      if (employee === undefined) throw new Error('no colleague named "' + slug + '"')
+      return kitFor(employee)
+    },
+    writeKit: (slug, kit) => saveKitFor(slug, kit),
   })
   ctx.effect(() => ctx.commands.register(command))
   mountConsole()

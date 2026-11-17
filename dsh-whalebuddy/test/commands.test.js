@@ -73,7 +73,7 @@ test('the colleague command advertises its name and input hint', () => {
   const command = createEmployeeCommand(createStore(join(tmpdir(), 'whalebuddy-unused')))
   assert.equal(command.name, 'colleague')
   assert.equal(command.description, '创建或列出同事')
-  assert.deepEqual(command.input, { hint: 'new <名字> | ls' })
+  assert.deepEqual(command.input, { hint: 'new <名字> | ls | kit [<slug> [set|add|rm|reset <包,...>]]' })
   assert.equal(typeof command.handler, 'function')
 })
 
@@ -119,7 +119,7 @@ test('an unknown subcommand reports the usage', async () => {
   const store = await office()
   assert.deepEqual(await createEmployeeCommand(store).handler(invoke('rm 小白')), {
     kind: 'error',
-    text: '用法：/colleague new <名字> | ls',
+    text: '用法：/colleague new <名字> | ls | kit [<slug> [set|add|rm|reset <包,...>]]',
   })
 })
 
@@ -154,7 +154,7 @@ test('the data root prefers config, then dshHomePath, then ~/.dsh', () => {
   )
 })
 
-test('apply registers /colleague through an effect disposer', () => {
+test('apply registers /colleague through an effect disposer', async () => {
   const registered = []
   const disposed = []
   let effectDisposer
@@ -171,7 +171,7 @@ test('apply registers /colleague through an effect disposer', () => {
       },
     },
   }
-  apply(ctx, { dataDir: join(tmpdir(), 'whalebuddy-apply-test') })
+  await apply(ctx, { dataDir: join(tmpdir(), 'whalebuddy-apply-test') })
   assert.equal(registered.length, 1)
   assert.equal(registered[0].name, 'colleague')
   assert.equal(typeof effectDisposer, 'function')

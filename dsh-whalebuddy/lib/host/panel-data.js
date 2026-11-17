@@ -11,6 +11,7 @@ import { parseBoard } from './board.js'
 import { appendChange } from '../changelog.js'
 import { assembleMemory } from '../inject.js'
 import { NOTICE_FILE, aggregateNotices, markRead, noticeCapFromState, parseNotices } from '../notices.js'
+import { normalizeKit, packList, suggestKit } from '../packs.js'
 
 /**
  * The only files the console may write. Anything else is refused, so a bug in
@@ -98,7 +99,7 @@ export function buildPreview(files, tasks = []) {
  * One colleague's editable files plus the preview they produce.
  * @param {import('../store.js').Store} store
  * @param {string} slug
- * @returns {Promise<{slug: string, files: Record<string, string>, bound: string[], preview: string, notices: import('../notices.js').Notice[], noticeCap: number}>}
+ * @returns {Promise<{slug: string, files: Record<string, string>, bound: string[], preview: string, notices: import('../notices.js').Notice[], noticeCap: number, kit: string[]}>}
  */
 export async function readColleague(store, slug) {
   const read = async (rel) => (await store.read(slug, rel)) ?? ''
@@ -115,6 +116,15 @@ export async function readColleague(store, slug) {
     read('state.json'),
     read(NOTICE_FILE),
   ])
+  let kit = []
+  try {
+    const state = JSON.parse(stateText)
+    if (state !== null && typeof state === 'object' && Array.isArray(state.kit)) {
+      kit = state.kit.filter((id) => typeof id === 'string')
+    }
+  } catch {
+    // A corrupt state file simply has no explicit kit; the role hint applies.
+  }
   const tasks = await store.tasks(slug).catch(() => [])
   const files = {
     profile,
@@ -134,6 +144,7 @@ export async function readColleague(store, slug) {
     preview: buildPreview(files, tasks),
     notices: parseNotices(noticesText),
     noticeCap: noticeCapFromState(stateText),
+    kit,
   }
 }
 
@@ -194,14 +205,43 @@ export async function markNoticesRead(store, slug, id, at = Date.now()) {
  * it so there is never a second parser or a second source of truth.
  * @param {import('../store.js').Store} store
  * @param {string} [slug]
- * @returns {Promise<{employees: import('../store.js').EmployeeSummary[], selected: string, colleague: Awaited<ReturnType<typeof readColleague>> | null, board: string, tasksView: import('./board.js').TasksView}>}
+ * @returns {Promise<{employees: import('../store.js').EmployeeSummary[], selected: string, colleague: Awaited<ReturnType<typeof readColleague>> | null, board: string, tasksView: import('./board.js').TasksView, kit: string[], packs: ReturnType<typeof packList>}>}
  */
-export async function readPanelState(store, slug) {
+export async function readPanelState(store, slug, options = {}) {
   const employees = await store.list()
   const selected = typeof slug === 'string' && slug !== '' ? slug : employees[0]?.slug ?? ''
+  const packs = options.packs
+  const employee = employees.find((entry) => entry.slug === selected)
   const colleague = selected === '' ? null : await readColleague(store, selected)
+  const kit = packs === undefined || colleague === null
+    ? []
+    : normalizeKit(colleague.kit.length > 0 ? colleague.kit : suggestKit(employee?.role), packs)
+  if (colleague !== null) colleague.kit = kit
   const board = await readBoard(store)
-  return { employees, selected, colleague, board, tasksView: parseBoard(board) }
+  return {
+    employees,
+    selected,
+    colleague,
+    board,
+    tasksView: parseBoard(board),
+    kit,
+    packs: packs === undefined ? [] : packList(packs, kit),
+  }
+}
+
+/**
+ * Change one colleague's kit from the console, then answer with the whole
+ * panel so the tab repaints from the same data the host will compile.
+ * @param {import('../store.js').Store} store
+ * @param {string} slug
+ * @param {string[]} kit
+ * @param {Map<string, import('../packs.js').Pack>} packs
+ * @returns {Promise<Awaited<ReturnType<typeof readPanelState>>>}
+ */
+export async function changeKit(store, slug, kit, packs) {
+  const saved = await store.setKit(slug, normalizeKit(kit, packs))
+  await appendChange(store, slug, '工具箱', saved.join('、'))
+  return readPanelState(store, slug, { packs })
 }
 
 /**

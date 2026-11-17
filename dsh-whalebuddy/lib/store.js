@@ -37,6 +37,8 @@ import { isNoticeCap } from './notices.js'
  * @property {(input: CreateEmployeeInput) => Promise<EmployeeSummary>} create
  * @property {(slug: string, autonomy: 'L1' | 'L2' | 'L3') => Promise<EmployeeSummary>} setAutonomy
  * @property {(slug: string, cap: number) => Promise<void>} setNoticeCap
+ * @property {(slug: string) => Promise<Record<string, unknown>>} state
+ * @property {(slug: string, kit: string[]) => Promise<string[]>} setKit
  * @property {(slug: string, rel: string) => Promise<string | undefined>} read
  * @property {(slug: string, rel: string, text: string) => Promise<void>} write
  * @property {(slug: string) => Promise<Task[]>} tasks
@@ -424,6 +426,26 @@ export function createStore(root) {
   }
 
   /**
+   * Replace one colleague's capability kit, keeping the rest of her state.
+   * The kit is order-preserving, de-duplicated, and must name at least one
+   * pack; an empty list is refused rather than silently resetting to default.
+   * @param {string} slug
+   * @param {string[]} kit
+   * @returns {Promise<string[]>}
+   */
+  async function setKit(slug, kit) {
+    const existing = await summaryOf(slug)
+    if (existing === undefined) throw new Error('no colleague named "' + slug + '"')
+    const next = Array.isArray(kit) ? [...new Set(kit.filter((id) => typeof id === 'string' && id.trim() !== '').map((id) => id.trim()))] : []
+    if (next.length === 0) throw new Error('kit must name at least one pack')
+    const state = await stateOf(slug)
+    if (typeof state.presetId !== 'string') state.presetId = ''
+    state.kit = next
+    await writeState(slug, state)
+    return next
+  }
+
+  /**
    * @param {string} slug
    * @param {string} rel
    * @returns {Promise<string | undefined>}
@@ -489,5 +511,5 @@ export function createStore(root) {
     return items
   }
 
-  return { list, create, setAutonomy, setNoticeCap, read, write, tasks, saveTasks, orders, repair }
+  return { list, create, setAutonomy, setNoticeCap, state: stateOf, setKit, read, write, tasks, saveTasks, orders, repair }
 }

@@ -25,6 +25,12 @@ test('a template row from another colleague never doubles the memory section', (
   assert.deepEqual(def.plugins.map((row) => row.name), ['some-base-plugin', '@fanyingnie/dsh-whalebuddy'])
 })
 
+test('the tool surface rides in the preset row', () => {
+  const def = buildPresetDefinition(emp, [], undefined, { toolSurface: '### 工具面\n有：基座' })
+  const own = def.plugins.find(r => r.name === '@fanyingnie/dsh-whalebuddy')
+  assert.equal(own.config.toolSurface, '### 工具面\n有：基座')
+})
+
 test('a custom data root rides along in the preset row', () => {
   const def = buildPresetDefinition(emp, [], 'D:/colleagues')
   const own = def.plugins.find(r => r.name === '@fanyingnie/dsh-whalebuddy')

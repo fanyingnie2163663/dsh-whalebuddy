@@ -16,6 +16,7 @@ import { isNoticeCap } from '../notices.js'
 import {
   bindWorkspace,
   changeAutonomy,
+  changeKit,
   changeNoticeCap,
   isWritable,
   markNoticesRead,
@@ -33,6 +34,7 @@ export const ROUTES = Object.freeze({
   noticesRead: '/api/whalebuddy/notices/read',
   create: '/api/whalebuddy/create',
   assign: '/api/whalebuddy/assign',
+  kit: '/api/whalebuddy/kit',
 })
 
 /** The largest request body accepted: a 64 KB file plus JSON escaping. */
@@ -240,6 +242,8 @@ function workspacesOf(listWorkspaces) {
  * @property {{ warn?: (message: string) => void }} [logger]
  * @property {() => Array<{id: string, title: string, path: string}>} [listWorkspaces]
  * @property {(id: string) => string | undefined} [workspacePath]
+ * @property {Map<string, import('../packs.js').Pack>} [packs]
+ * @property {(slug: string, kit: string[]) => Promise<string[]>} [onKitChange]
  */
 
 /**
@@ -247,7 +251,7 @@ function workspacesOf(listWorkspaces) {
  * @param {PanelRouteOptions} options
  * @returns {Array<{kind: 'exact', path: string, handler: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => Promise<void>}>}
  */
-export function createPanelRoutes({ store, allow, onCreate, logger, listWorkspaces, workspacePath }) {
+export function createPanelRoutes({ store, allow, onCreate, logger, listWorkspaces, workspacePath, packs, onKitChange }) {
   const permitted = typeof allow === 'function' ? allow : isLoopbackRequest
 
   const fail = (res, error) => {
@@ -263,7 +267,7 @@ export function createPanelRoutes({ store, allow, onCreate, logger, listWorkspac
         if (!guard(permitted, req, res, 'GET')) return
         try {
           const slug = requestUrl(req).searchParams.get('slug') ?? ''
-          writeJson(res, 200, { ...(await readPanelState(store, slug)), workspaces: workspacesOf(listWorkspaces) })
+          writeJson(res, 200, { ...(await readPanelState(store, slug, { packs })), workspaces: workspacesOf(listWorkspaces) })
         } catch (error) {
           fail(res, error)
         }
@@ -368,6 +372,52 @@ export function createPanelRoutes({ store, allow, onCreate, logger, listWorkspac
             panel = { ...panel, ...(await changeNoticeCap(store, slug, cap)) }
           }
           writeJson(res, 200, { ...panel, workspaces: workspacesOf(listWorkspaces) })
+        } catch (error) {
+          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: ROUTES.kit,
+      async handler(req, res) {
+        if (!guard(permitted, req, res, 'POST')) return
+        const body = await readJsonObject(req, res)
+        if (body === undefined) return
+
+        const slug = textOf(body.slug)
+        if (slug === '') {
+          writeJson(res, 400, { error: 'slug is required' })
+          return
+        }
+        if (!Array.isArray(body.kit) || body.kit.length === 0 || body.kit.some((id) => typeof id !== 'string')) {
+          writeJson(res, 400, { error: 'kit must be a non-empty array of pack ids' })
+          return
+        }
+        if (packs === undefined) {
+          writeJson(res, 501, { error: 'capability packs are not loaded' })
+          return
+        }
+
+        let employees
+        try {
+          employees = await store.list()
+        } catch (error) {
+          fail(res, error)
+          return
+        }
+        if (!employees.some((employee) => employee.slug === slug)) {
+          writeJson(res, 404, { error: 'no colleague named "' + slug + '"' })
+          return
+        }
+
+        try {
+          if (typeof onKitChange === 'function') await onKitChange(slug, body.kit)
+          else await changeKit(store, slug, body.kit, packs)
+          writeJson(res, 200, {
+            ...(await readPanelState(store, slug, { packs })),
+            workspaces: workspacesOf(listWorkspaces),
+          })
         } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }

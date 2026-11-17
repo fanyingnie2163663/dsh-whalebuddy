@@ -55,11 +55,13 @@
     assign: 'api/whalebuddy/assign',
     notices: 'api/whalebuddy/notices',
     noticesRead: 'api/whalebuddy/notices/read',
+    kit: 'api/whalebuddy/kit',
   }
 
   /** The five surfaces, in tab order. */
   var TABS = [
     { id: 'profile', label: '档案' },
+    { id: 'kit', label: '工具箱' },
     { id: 'memory', label: '记忆' },
     { id: 'tasks', label: '工单', file: 'tasks', rel: 'memory/tasks.json' },
     { id: 'roster', label: '花名册', file: 'roster', rel: '_shared/roster.md' },
@@ -361,7 +363,7 @@
    * The HTTP face of the console. Kept separate from the components so it can
    * be handed a stub in tests.
    * @param {typeof fetch} [fetchImpl]
-   * @returns {{ state: (slug?: string) => Promise<*>, save: (payload: object) => Promise<*>, update: (payload: object) => Promise<*>, notices: () => Promise<*>, markRead: (payload: object) => Promise<*>, create: (payload: object) => Promise<*>, assign: (payload: object) => Promise<*> }}
+   * @returns {{ state: (slug?: string) => Promise<*>, save: (payload: object) => Promise<*>, update: (payload: object) => Promise<*>, kit: (payload: object) => Promise<*>, notices: () => Promise<*>, markRead: (payload: object) => Promise<*>, create: (payload: object) => Promise<*>, assign: (payload: object) => Promise<*> }}
    */
   function createApi(fetchImpl) {
     var run = typeof fetchImpl === 'function' ? fetchImpl : function () {
@@ -404,6 +406,9 @@
       },
       update: function (payload) {
         return request(API.update, { method: 'POST', body: payload })
+      },
+      kit: function (payload) {
+        return request(API.kit, { method: 'POST', body: payload })
       },
       notices: function () {
         return request(API.notices)
@@ -2365,8 +2370,74 @@
         )
       )
 
+      /**
+       * Toggle one capability pack. The host saves the kit and re-registers
+       * that colleague's preset; the running session keeps its revision.
+       * @param {string} id
+       * @returns {Promise<void>}
+       */
+      async function togglePack(id) {
+        if (selected === '' || busy || state === null) return
+        var current = Array.isArray(state.kit) ? state.kit : []
+        var next = current.includes(id)
+          ? current.filter(function (entry) { return entry !== id })
+          : current.concat([id])
+        if (next.length === 0) return
+        setBusy(true)
+        setStatus(null)
+        var ticket = requestRef.current
+        try {
+          var answer = await api.kit({ slug: selected, kit: next })
+          if (ticket !== requestRef.current) return
+          setState(answer)
+          setStatus({ kind: 'ok', text: '工具箱已更新 · 下次新会话生效' })
+        } catch (error) {
+          setStatus({ kind: 'error', text: '改工具箱失败：' + describe(error) })
+        } finally {
+          if (ticket === requestRef.current) setBusy(false)
+        }
+      }
+
+      var kitPacks = state !== null && Array.isArray(state.packs) ? state.packs : []
+      var kitSelected = 0
+      for (var kitIndex = 0; kitIndex < kitPacks.length; kitIndex += 1) {
+        if (kitPacks[kitIndex] && kitPacks[kitIndex].selected === true) kitSelected += 1
+      }
+      var kitPane = h('div', { className: 'wb-pane', 'data-dsh-part': 'colleague-pane-kit' },
+        h('section', { className: 'wb-card' },
+          h('div', { className: 'wb-cardHead' },
+            h('h3', { className: 'wb-cardTitle' }, '工具箱'),
+            h('span', { className: 'wb-cardAction wb-hint' }, busy ? '保存中…' : '下次新会话生效')
+          ),
+          h('p', { className: 'wb-hint' }, '她只带勾选的能力包开工：没勾的包，它的工具与技能不会出现在她的会话里。'),
+          kitPacks.length === 0
+            ? h('p', { className: 'wb-inlineEmpty' }, '能力包没有加载。')
+            : h('div', { className: 'wb-tasks' }, kitPacks.map(function (pack) {
+                var meta = pack.description || ''
+                if (Array.isArray(pack.tools) && pack.tools.length > 0) meta = (meta === '' ? '' : meta + ' · ') + pack.tools.join(' / ')
+                return h('label', {
+                  key: pack.id,
+                  className: 'wb-task',
+                  title: pack.description || pack.id,
+                },
+                  h('input', {
+                    type: 'checkbox',
+                    checked: pack.selected === true,
+                    disabled: busy || pack.id === 'core' || (pack.selected === true && kitSelected <= 1),
+                    onChange: function () { void togglePack(pack.id) },
+                  }),
+                  h('span', { className: 'wb-taskText' },
+                    h('span', { className: 'wb-itemName' }, pack.name + ' · ' + pack.id),
+                    h('span', { className: 'wb-itemMeta' }, meta)
+                  )
+                )
+              }))
+        )
+      )
+
       var panes = {
         profile: profilePane,
+        kit: kitPane,
         memory: memoryPane,
         tasks: tasksPane,
         roster: rosterPane,

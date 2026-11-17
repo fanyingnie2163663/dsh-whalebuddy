@@ -43,15 +43,15 @@ async function fakeProfileContext(sink) {
   return { ctx, config: { dataDir }, cleanup: () => consoleCleanup?.() }
 }
 
-test('the profile-level load mounts all seven console routes', async () => {
+test('the profile-level load mounts all eight console routes', async () => {
   const sink = { routes: [], released: [], warnings: [] }
   const { ctx, config } = await fakeProfileContext(sink)
   await plugin.apply(ctx, config)
 
-  assert.equal(sink.routes.length, 7)
+  assert.equal(sink.routes.length, 8)
   assert.deepEqual(
     sink.routes.map((route) => route.path).sort(),
-    [ROUTES.assign, ROUTES.create, ROUTES.notices, ROUTES.noticesRead, ROUTES.save, ROUTES.state, ROUTES.update].sort(),
+    [ROUTES.assign, ROUTES.create, ROUTES.kit, ROUTES.notices, ROUTES.noticesRead, ROUTES.save, ROUTES.state, ROUTES.update].sort(),
   )
   for (const route of sink.routes) {
     assert.equal(route.kind, 'exact')
@@ -86,10 +86,10 @@ test('unloading the plugin releases every console route', async () => {
   await plugin.apply(ctx, config)
 
   cleanup()
-  assert.equal(sink.released.length, 7)
+  assert.equal(sink.released.length, 8)
   assert.deepEqual(
     sink.released.sort(),
-    [ROUTES.assign, ROUTES.create, ROUTES.notices, ROUTES.noticesRead, ROUTES.save, ROUTES.state, ROUTES.update].sort(),
+    [ROUTES.assign, ROUTES.create, ROUTES.kit, ROUTES.notices, ROUTES.noticesRead, ROUTES.save, ROUTES.state, ROUTES.update].sort(),
   )
 })
 

@@ -104,9 +104,10 @@ function warn(logger, message) {
  * @param {EmployeeSummary} employee
  * @param {PresetRow[]} rows
  * @param {string} [dataDir]
+ * @param {{ toolDeny?: string[], toolSurface?: string }} [options]
  * @returns {PresetDefinition}
  */
-export function buildPresetDefinition(employee, rows, dataDir) {
+export function buildPresetDefinition(employee, rows, dataDir, options = {}) {
   const slug = employee.slug
   const name = typeof employee.name === 'string' && employee.name !== '' ? employee.name : slug
   const description = typeof employee.role === 'string' ? employee.role : ''
@@ -128,7 +129,14 @@ export function buildPresetDefinition(employee, rows, dataDir) {
       {
         id: MEMORY_PLUGIN_ID,
         name: OWN_PLUGIN_NAME,
-        config: root === undefined ? { employee: slug } : { employee: slug, dataDir: root },
+        config: {
+          employee: slug,
+          ...(root === undefined ? {} : { dataDir: root }),
+          ...(Array.isArray(options.toolDeny) && options.toolDeny.length > 0 ? { toolDeny: options.toolDeny } : {}),
+          ...(typeof options.toolSurface === 'string' && options.toolSurface.trim() !== ''
+            ? { toolSurface: options.toolSurface }
+            : {}),
+        },
       },
     ],
   }
@@ -179,18 +187,22 @@ export async function resolveTemplateRows(agentPresets, presetRows = []) {
  * `dataDir` is threaded into every built preset row (ruling R10).
  * @param {PresetRegistry} registry
  * @param {EmployeeSummary[]} employees
- * @param {PresetRow[]} rows
+ * @param {PresetRow[] | ((employee: EmployeeSummary) => PresetRow[] | Promise<PresetRow[]>)} rows
  * @param {PresetLogger} [logger]
  * @param {string} [dataDir]
+ * @param {(employee: EmployeeSummary) => { toolDeny?: string[] }} [optionsFor]
  * @returns {Promise<() => Promise<void>>}
  */
-export async function registerEmployeePresets(registry, employees, rows, logger, dataDir) {
+export async function registerEmployeePresets(registry, employees, rows, logger, dataDir, optionsFor) {
   /** @type {Array<() => Promise<void>>} */
   const disposers = []
+  const rowsFor = typeof rows === 'function' ? rows : () => rows
 
   for (const employee of employees) {
     try {
-      const dispose = await registry.register(buildPresetDefinition(employee, rows, dataDir))
+      const resolvedRows = await rowsFor(employee)
+      const options = typeof optionsFor === 'function' ? optionsFor(employee) : undefined
+      const dispose = await registry.register(buildPresetDefinition(employee, resolvedRows, dataDir, options))
       if (typeof dispose === 'function') disposers.push(dispose)
     } catch (error) {
       warn(logger, `同事「${employee?.slug}」的预设注册失败：${describeError(error)}`)
