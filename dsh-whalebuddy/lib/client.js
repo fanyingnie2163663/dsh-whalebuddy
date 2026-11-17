@@ -1186,6 +1186,31 @@
       var setPaused = pauseHook[1]
 
       var requestRef = React.useRef(0)
+      // Board-diff memory: the first load only seeds it; later polls announce new 已交 rows.
+      var doneRef = React.useRef({ ready: false, keys: {} })
+      var soundRef = React.useRef(null)
+      var soundOnHook = React.useState(function () {
+        try {
+          return !(typeof window !== 'undefined' && window.localStorage && window.localStorage.getItem('whalebuddy.sound') === 'off')
+        } catch (error) {
+          void error
+          return true
+        }
+      })
+      var soundOn = soundOnHook[0]
+      var setSoundOn = soundOnHook[1]
+      var soundOnRef = React.useRef(soundOn)
+      soundOnRef.current = soundOn
+
+      function toggleSound() {
+        var next = !soundOnRef.current
+        setSoundOn(next)
+        try {
+          if (typeof window !== 'undefined' && window.localStorage) window.localStorage.setItem('whalebuddy.sound', next ? 'on' : 'off')
+        } catch (error) {
+          void error
+        }
+      }
       var rootRef = React.useRef(null)
 
       var employees = (state && state.employees) || []
@@ -1286,23 +1311,90 @@
       }
 
       /**
-       * Adopt one panel payload, dropping stale answers.
+       * A short two-note chime for a fresh delivery. Browsers only allow audio
+       * after a gesture, so the context is created lazily and resumed on demand;
+       * no window (tests, headless) means no sound and no error.
+       * @returns {void}
+       */
+      function chime() {
+        if (typeof window === 'undefined') return
+        if (!soundOnRef.current) return
+        var legacyAudio = /** @type {*} */ (window).webkitAudioContext
+        var Ctx = window.AudioContext || legacyAudio
+        if (!Ctx) return
+        try {
+          var ctx = soundRef.current
+          if (!ctx) {
+            ctx = new Ctx()
+            soundRef.current = ctx
+          }
+          if (ctx.state === 'suspended' && typeof ctx.resume === 'function') void ctx.resume()
+          var start = ctx.currentTime
+          var notes = [660, 880]
+          for (var index = 0; index < notes.length; index += 1) {
+            var osc = ctx.createOscillator()
+            var gain = ctx.createGain()
+            var at = start + index * 0.12
+            osc.type = 'sine'
+            osc.frequency.value = notes[index]
+            gain.gain.setValueAtTime(0.0001, at)
+            gain.gain.exponentialRampToValueAtTime(0.05, at + 0.02)
+            gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.28)
+            osc.connect(gain)
+            gain.connect(ctx.destination)
+            osc.start(at)
+            osc.stop(at + 0.3)
+          }
+        } catch (error) {
+          void error
+        }
+      }
+
+      /**       * Announce rows that turned 已交 since the previous poll. The first load
+       * only seeds the memory, so opening the panel is not "N new deliveries".
+       * @param {*} payload
+       * @returns {void}
+       */
+      function announceDone(payload) {
+        var rows = payload && payload.tasksView && Array.isArray(payload.tasksView.rows) ? payload.tasksView.rows : []
+        var keys = {}
+        var fresh = []
+        for (var index = 0; index < rows.length; index += 1) {
+          var row = rows[index]
+          if (!row || row.status !== '已交') continue
+          var key = String(row.who || '') + '|' + String(row.what || '')
+          keys[key] = true
+          if (doneRef.current.ready && !doneRef.current.keys[key]) fresh.push(row)
+        }
+        doneRef.current = { ready: true, keys: keys }
+        if (fresh.length === 0) return
+        var who = []
+        for (var i = 0; i < fresh.length; i += 1) {
+          var name = String(fresh[i].who || '').trim()
+          if (name !== '' && who.indexOf(name) === -1) who.push(name)
+        }
+        setStatus({ kind: 'ok', text: '新交付 ' + fresh.length + ' 件 · ' + who.join('、') })
+        chime()
+      }
+
+      /**       * Adopt one panel payload, dropping stale answers.
        * @param {string} slug
        * @returns {Promise<void>}
        */
-      async function load(slug) {
+      async function load(slug, silent) {
         requestRef.current += 1
         var ticket = requestRef.current
-        setBusy(true)
+        if (silent !== true) setBusy(true)
         try {
           var next = await api.state(slug)
           if (ticket !== requestRef.current) return
           adopt(next)
+          announceDone(next)
         } catch (error) {
           if (ticket !== requestRef.current) return
           setStatus({ kind: 'error', text: '读取失败：' + describe(error) })
         } finally {
-          if (ticket === requestRef.current) setBusy(false)
+          if (ticket === requestRef.current && silent !== true) setBusy(false)
         }
       }
 
@@ -1619,6 +1711,14 @@
         h('p', { className: 'wb-sub' }, subtitle),
         h('span', { className: 'wb-spacer' }),
         status !== null ? h('span', { className: 'wb-status', 'data-kind': status.kind, role: 'status' }, status.text) : null,
+        h('button', {
+          type: 'button',
+          className: 'wb-btn',
+          'aria-pressed': soundOn,
+          'data-active': soundOn ? '' : undefined,
+          title: soundOn ? '新交付时响一声，点这里关掉' : '已静音，点这里打开声音',
+          onClick: toggleSound,
+        }, soundOn ? '声音开' : '声音关'),
         h('button', {
           type: 'button',
           className: 'wb-btn',
