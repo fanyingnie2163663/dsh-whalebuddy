@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 
 const SOURCE = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+const PACKAGE_NAME = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).name
 
 /**
  * Load the shipped browser bundle in a bare VM context with only `window`,
@@ -138,6 +139,16 @@ const PANEL_STATE = {
     ],
     noticeCap: 2,
   },
+  board: '| 状态 | 谁 | 什么 | 时间 |\n|---|---|---|---|\n| 在做 | 逆戟 | 把样片剪到 60 秒 | 2026-11-18 11:30 |\n| 在做 | 逆戟 | 补字幕 | 2026-11-18 10:20 |\n| 待接 | 逆戟 | 审一遍 P1 的改动 | 2026-11-18 |\n| 打回 | 逆戟 | 关心版的三层引擎 | 2026-11-17 |\n| 已定 | 蓝鲸 | 不进图的决策 | 2026-11-18 |',
+  tasksView: {
+    rows: [
+      { status: '在做', who: '逆戟', what: '把样片剪到 60 秒', time: '2026-11-18 11:30' },
+      { status: '在做', who: '逆戟', what: '补字幕', time: '2026-11-18 10:20' },
+      { status: '待接', who: '逆戟', what: '审一遍 P1 的改动', time: '2026-11-18' },
+      { status: '打回', who: '逆戟', what: '关心版的三层引擎', time: '2026-11-17' },
+    ],
+    badRows: 1,
+  },
   workspaces: [{ id: 'w1', title: '示例项目', path: 'C:/work/a' }],
 }
 
@@ -229,7 +240,7 @@ function mountPlugin(options = {}) {
 
 test('the bundle registers itself under the package name', () => {
   const bundle = loadBundle(okFetch)
-  assert.equal(bundle.id, 'dsh-whalebuddy')
+  assert.equal(bundle.id, PACKAGE_NAME)
 })
 
 test('the factory returns a slots plugin carrying the panel components', () => {
@@ -678,7 +689,7 @@ test('the tasks tab toggles a task through the save route', async () => {
 
   const tab = findAll(
     tree,
-    (node) => node.type === 'button' && node.props?.role === 'tab' && /待办/.test(textOf(node)),
+    (node) => node.type === 'button' && node.props?.role === 'tab' && /工单/.test(textOf(node)),
   )[0]
   assert.ok(tab, 'tasks have a tab')
   tab.props.onClick()
@@ -695,6 +706,30 @@ test('the tasks tab toggles a task through the save route', async () => {
   const body = JSON.parse(save.init.body)
   assert.equal(body.rel, 'memory/tasks.json')
   assert.match(body.text, /"status": "done"/)
+})
+
+test('the tasks tab renders four states, one focus, and the board count', async () => {
+  const { registered, react } = mountPlugin()
+  const Page = registered[1].component
+
+  react.render(Page)
+  await new Promise((resolve) => setImmediate(resolve))
+  let tree = react.render(Page)
+
+  const tab = findAll(
+    tree,
+    (node) => node.type === 'button' && node.props?.role === 'tab' && /工单/.test(textOf(node)),
+  )[0]
+  tab.props.onClick()
+  tree = react.render(Page)
+
+  const rows = findAll(tree, (node) => node.props?.className === 'wb-trow')
+  assert.deepEqual(rows.map((row) => row.props['data-state']), ['doing', 'doing', 'returned', 'pending'])
+  const focus = rows.filter((row) => row.props['data-focus'] === 'true')
+  assert.equal(focus.length, 1)
+  assert.equal(focus[0].props['data-time'], '11:30')
+  assert.equal(findAll(tree, (node) => node.props?.['data-wb-task-count'] !== undefined)[0].props.children, '2 件在做 · 1 件待接 · 1 件打回')
+  assert.equal(findAll(tree, (node) => node.props?.className === 'wb-treePerson').length, 2)
 })
 
 test('the onboarding wizard prefills a persona and posts the colleague', async () => {

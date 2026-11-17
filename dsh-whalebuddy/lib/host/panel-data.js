@@ -7,6 +7,7 @@
  *
  * @module dsh-whalebuddy/host/panel-data
  */
+import { parseBoard } from './board.js'
 import { appendChange } from '../changelog.js'
 import { assembleMemory } from '../inject.js'
 import { NOTICE_FILE, aggregateNotices, markRead, noticeCapFromState, parseNotices } from '../notices.js'
@@ -187,15 +188,34 @@ export async function markNoticesRead(store, slug, id, at = Date.now()) {
 
 /**
  * The whole panel state for one selected colleague.
+ *
+ * `board` stays the raw file (the folded text view); `tasksView` is the same
+ * file parsed once, and both the four-state list and the team tree render from
+ * it so there is never a second parser or a second source of truth.
  * @param {import('../store.js').Store} store
  * @param {string} [slug]
- * @returns {Promise<{employees: import('../store.js').EmployeeSummary[], selected: string, colleague: Awaited<ReturnType<typeof readColleague>> | null}>}
+ * @returns {Promise<{employees: import('../store.js').EmployeeSummary[], selected: string, colleague: Awaited<ReturnType<typeof readColleague>> | null, board: string, tasksView: import('./board.js').TasksView}>}
  */
 export async function readPanelState(store, slug) {
   const employees = await store.list()
   const selected = typeof slug === 'string' && slug !== '' ? slug : employees[0]?.slug ?? ''
   const colleague = selected === '' ? null : await readColleague(store, selected)
-  return { employees, selected, colleague }
+  const board = await readBoard(store)
+  return { employees, selected, colleague, board, tasksView: parseBoard(board) }
+}
+
+/**
+ * Read the shared work board (`_shared/board.md`). A missing board is normal.
+ * @param {import('../store.js').Store} store
+ * @returns {Promise<string>}
+ */
+async function readBoard(store) {
+  try {
+    const text = await store.read(SHARED_SLUG, 'board.md')
+    return typeof text === 'string' ? text : ''
+  } catch {
+    return ''
+  }
 }
 
 /**

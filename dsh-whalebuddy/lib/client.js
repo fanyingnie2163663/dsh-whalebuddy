@@ -61,7 +61,7 @@
   var TABS = [
     { id: 'profile', label: '档案' },
     { id: 'memory', label: '记忆' },
-    { id: 'tasks', label: '待办', file: 'tasks', rel: 'memory/tasks.json' },
+    { id: 'tasks', label: '工单', file: 'tasks', rel: 'memory/tasks.json' },
     { id: 'roster', label: '花名册', file: 'roster', rel: '_shared/roster.md' },
     { id: 'changelog', label: '变更', file: 'changelog', rel: 'memory/changelog.md', readOnly: true },
   ]
@@ -79,7 +79,7 @@
     { file: 'hot', rel: 'memory/hot.md', label: '热记忆' },
     { file: 'rapport', rel: 'memory/rapport.md', label: '默契' },
     { file: 'knowledge', rel: 'memory/knowledge.md', label: '知识' },
-    { file: 'tasks', rel: 'memory/tasks.json', label: '待办' },
+    { file: 'tasks', rel: 'memory/tasks.json', label: '工单' },
     { file: 'roster', rel: '_shared/roster.md', label: '花名册' },
   ]
 
@@ -110,7 +110,7 @@
    * decorative clay mark and its mixes, which never carry body text.
    */
   var CSS = [
-    '.wb-root{--wb-serif:"Noto Serif SC","Source Han Serif SC","Songti SC",Georgia,serif;--wb-clay:#D97757;height:100%;min-height:0;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family);overflow:hidden;position:relative;container-type:inline-size;container-name:wb}',
+    '.wb-root{--wb-serif:"Noto Serif SC","Source Han Serif SC","Songti SC",Georgia,serif;--wb-clay:#D97757;--wb-st-pending:#6F7580;--wb-st-doing:#0B7285;--wb-st-done:#1F7A4D;--wb-st-returned:#B3352B;--wb-st-stuck:#A9530C;--wb-focus-bg:#F2F7F8;height:100%;min-height:0;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family);overflow:hidden;position:relative;container-type:inline-size;container-name:wb}',
     '.wb-head{flex:none;display:flex;align-items:center;gap:10px;padding:14px 18px 10px;min-height:32px}',
     '.wb-title{margin:0;font-family:var(--wb-serif);font-size:21px;font-weight:600;letter-spacing:-.01em;white-space:nowrap}',
     '.wb-sub{margin:0;font-size:11.5px;color:var(--dsw-alias-label-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
@@ -219,6 +219,72 @@
     '.wb-taskText{flex:1;min-width:0}',
     '.wb-taskDone{color:var(--dsw-alias-label-tertiary);text-decoration:line-through}',
     '.wb-taskDue{flex:none;margin-top:2px;font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap}',
+    '.wb-tasks{margin:0;padding:0}',
+    '.wb-trow{position:relative;display:grid;grid-template-columns:14px 22px minmax(0,1fr) auto 76px;column-gap:8px;align-items:start;box-sizing:border-box;padding:8px 6px;border-radius:8px;min-height:37px}',
+    '.wb-trow[data-focus=true]{background:var(--wb-focus-bg)}',
+    '.wb-trow[data-state=returned]::before{content:"";position:absolute;left:0;top:50%;width:2px;height:14px;margin-top:-7px;border-radius:1px;background:var(--wb-st-returned)}',
+    '.wb-tmark{display:block;width:14px;height:14px;margin-top:3px;flex:none}',
+    '.wb-tmark svg{display:block;width:14px;height:14px}',
+    '.wb-trow[data-state=pending] .wb-tmark{color:var(--wb-st-pending)}',
+    '.wb-trow[data-state=doing] .wb-tmark{color:var(--wb-st-doing)}',
+    '.wb-trow[data-state=done] .wb-tmark{color:var(--wb-st-done)}',
+    '.wb-trow[data-state=returned] .wb-tmark{color:var(--wb-st-returned)}',
+    '.wb-tstate{width:22px;margin-top:3px;font-size:11px;font-weight:600;line-height:14px;white-space:nowrap;overflow:visible}',
+    '.wb-trow[data-state=pending] .wb-tstate{color:var(--wb-st-pending)}',
+    '.wb-trow[data-state=doing] .wb-tstate{color:var(--wb-st-doing)}',
+    '.wb-trow[data-state=returned] .wb-tstate{color:var(--wb-st-returned)}',
+    '.wb-ttext{min-width:0;font-size:13.5px;line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}',
+    '.wb-ttext[data-done=true]{color:var(--dsw-alias-label-tertiary);text-decoration:line-through}',
+    '.wb-tmeta{display:contents}',
+    '.wb-twho{grid-column:4;margin-top:3px;max-width:44px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:14px;color:var(--dsw-alias-label-tertiary)}',
+    '.wb-ttime{grid-column:5;margin-top:3px;text-align:right;white-space:nowrap;font-size:11px;line-height:14px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}',
+    '.wb-ttime[data-tone=doing]{color:var(--wb-st-doing)}',
+    '.wb-ttime[data-tone=stuck]{color:var(--wb-st-stuck)}',
+    '.wb-trow[data-state=returned] .wb-ttime{color:var(--wb-st-returned)}',
+    '.wb-tstuck{display:inline-block;width:5px;height:5px;margin-right:4px;vertical-align:1px;background:var(--wb-st-stuck)}',
+    '.wb-tunalign{grid-column:4;white-space:nowrap;font-size:10px;line-height:14px;color:var(--dsw-alias-label-tertiary)}',
+    '.wb-tunalign::before{content:"";display:inline-block;width:5px;height:5px;margin-right:4px;border-radius:50%;vertical-align:1px;background:var(--wb-st-pending)}',
+    '.wb-twide{display:inline}',
+    '.wb-tnarrow{display:none}',
+    '.wb-tdot{opacity:.72;transform-box:fill-box;transform-origin:center}',
+    '.wb-trow[data-animate=true] .wb-tdot{animation:wb-task-doing 7.2s ease-out}',
+    '@keyframes wb-task-doing{0%{opacity:0;transform:scale(.6)}12.5%{opacity:1;transform:scale(1)}25%{opacity:.55}41.7%{opacity:.8}58.3%{opacity:.55}75%{opacity:.8}91.7%{opacity:.55}100%{opacity:.72;transform:scale(1)}}',
+    '@media (prefers-reduced-motion:reduce){.wb-trow[data-animate=true] .wb-tdot{animation:none}}',
+    '.wb-root[data-wb-paused=true] .wb-tdot{animation-play-state:paused}',
+    '.wb-tlegacy{margin-top:14px;padding-top:12px;border-top:1px solid var(--dsw-alias-border-l1)}',
+    '.wb-tlegacyHead{display:flex;align-items:baseline;gap:8px;margin:0 0 4px;font-size:11px;font-weight:600;color:var(--dsw-alias-label-tertiary)}',
+    '.wb-tlegacyHead .wb-hint{font-weight:400}',
+    '.wb-team{margin:0 0 12px;padding:8px 12px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px}',
+    '.wb-teamHead{cursor:pointer;display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600}',
+    '.wb-teamHead .wb-hint{margin-left:auto;font-weight:400}',
+    '.wb-tree{margin-top:10px;display:flex;flex-direction:column;gap:2px;max-height:200px;overflow-y:auto;padding-right:2px}',
+    '.wb-treePerson{position:relative;margin-left:6px;padding:3px 0 3px 18px;border-left:1px solid var(--dsw-alias-border-l2)}',
+    '.wb-treePerson::before{content:"";position:absolute;left:-1px;top:13px;width:12px;height:1px;background:var(--dsw-alias-border-l2)}',
+    '.wb-treeHead{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}',
+    '.wb-treeSignal{display:inline-flex;align-items:center}',
+    '.wb-treeSignal .wb-tmark{margin-top:0}',
+    '.wb-treeSignal[data-person-state=pending] .wb-tmark{color:var(--wb-st-pending)}',
+    '.wb-treeSignal[data-person-state=doing] .wb-tmark{color:var(--wb-st-doing)}',
+    '.wb-treeSignal[data-person-state=done] .wb-tmark{color:var(--wb-st-done)}',
+    '.wb-treeSignal[data-person-state=returned] .wb-tmark{color:var(--wb-st-returned)}',
+    '.wb-treeLeaf[data-state=returned]{border-left:2px solid var(--wb-st-returned);padding-left:6px;margin-left:-8px}',
+    '.wb-treeName{font-size:12.5px;font-weight:600}',
+    '.wb-treeRole{font-size:11px;color:var(--dsw-alias-label-tertiary)}',
+    '.wb-treeStats{margin-left:auto;font-size:10.5px;color:var(--dsw-alias-label-tertiary);white-space:nowrap}',
+    '.wb-treeLeaves{display:flex;flex-direction:column;gap:2px;margin-top:4px}',
+    '.wb-treeLeaf{display:grid;grid-template-columns:14px 22px minmax(0,1fr);column-gap:8px;align-items:start;padding:2px 0;font-size:12px;line-height:1.45}',
+    '.wb-treeLeaf .wb-tmark{margin-top:2px}',
+    '.wb-treeLeaf .wb-tstate{margin-top:2px}',
+    '.wb-treeLeafText{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary)}',
+    '.wb-treeLeaf[data-state=pending] .wb-tmark{color:var(--wb-st-pending)}',
+    '.wb-treeLeaf[data-state=doing] .wb-tmark{color:var(--wb-st-doing)}',
+    '.wb-treeLeaf[data-state=done] .wb-tmark{color:var(--wb-st-done)}',
+    '.wb-treeLeaf[data-state=returned] .wb-tmark{color:var(--wb-st-returned)}',
+    '.wb-treeLeaf[data-state=pending] .wb-tstate{color:var(--wb-st-pending)}',
+    '.wb-treeLeaf[data-state=doing] .wb-tstate{color:var(--wb-st-doing)}',
+    '.wb-treeLeaf[data-state=returned] .wb-tstate{color:var(--wb-st-returned)}',
+    '.wb-treeEmpty{margin:3px 0 0;font-size:11px;color:var(--dsw-alias-label-tertiary)}',
+    '@container wb (max-width:499px){.wb-trow{grid-template-columns:14px 22px minmax(0,1fr);column-gap:6px;padding:8px 2px;min-height:51px}.wb-tmeta{grid-column:3/-1;display:flex;align-items:baseline;gap:8px;min-width:0}.wb-twho,.wb-ttime{margin-top:0;font-size:10.5px;line-height:1.4}.wb-ttime{margin-left:auto;text-align:right}.wb-twide{display:none}.wb-tnarrow{display:inline}.wb-treeStats{margin-left:0;width:100%}}',
     '.wb-logRow{display:flex;gap:10px;padding:7px 0;border-top:1px solid var(--dsw-alias-border-l1);font-size:12.5px;line-height:1.6}',
     '.wb-logRow:first-child{border-top:0;padding-top:0}',
     '.wb-logTime{flex:none;width:118px;font-family:var(--ds-font-family-code);font-size:10.5px;color:var(--dsw-alias-label-tertiary);padding-top:3px}',
@@ -226,6 +292,9 @@
     '.wb-logSource{color:var(--dsw-alias-label-secondary)}',
     '.wb-preview{display:none;min-width:0;min-height:0;flex-direction:column;border-left:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base)}',
     '.wb-root[data-preview=open] .wb-preview{display:flex}',
+  '.wb-board{margin:0 0 12px;padding:8px 12px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;}',
+  '.wb-boardHead{cursor:pointer;font-size:12px;font-weight:600;}',
+  '.wb-boardText{margin:8px 0 0;white-space:pre-wrap;font-size:12px;line-height:1.5;max-height:220px;overflow:auto;}',
     '.wb-previewHead{flex:none;display:flex;align-items:center;gap:8px;padding:14px 14px 8px;font-size:11.5px;font-weight:600;color:var(--dsw-alias-label-secondary)}',
     '.wb-previewHead .wb-hint{margin-left:auto;font-weight:400}',
     '.wb-pre{flex:1;min-height:0;margin:0 14px 14px;padding:12px;overflow:auto;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-specific-input-major);color:var(--dsw-alias-label-secondary);font-family:var(--ds-font-family-code);font-size:11px;line-height:1.75;white-space:pre-wrap;word-break:break-word}',
@@ -263,7 +332,7 @@
     '@container wb (max-width:819px){.wb-body{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}.wb-list{flex-direction:row;align-items:center;gap:6px;padding:8px;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l1);overflow-x:auto}.wb-item{width:172px;grid-template-columns:30px minmax(0,1fr);flex:none;padding:6px 8px}.wb-item .wb-avatar{width:30px;height:30px;font-size:14px}.wb-item .wb-dot{display:none}.wb-listFoot{position:sticky;right:-8px;margin:0;flex:none;padding:0 10px 0 6px;background:var(--dsw-alias-bg-base);box-shadow:-10px 0 12px -8px rgba(0,0,0,.22)}.wb-listFoot .wb-btn{width:auto}.wb-profileHead{padding:14px 16px 0}.wb-chips{margin-left:0;width:100%;justify-content:flex-start}.wb-tabs{padding:0 16px}.wb-pane{padding:14px 16px 22px}.wb-name{font-size:23px}}',
     '@container wb (max-width:900px){.wb-wizardBody{grid-template-columns:minmax(0,1fr)}.wb-wizardPreview{display:none}}',
     '.wb-root{color-scheme:light}',
-    '.wb-root[data-wb-theme=dark]{color-scheme:dark;--dsw-alias-bg-base:#14171c;--dsw-alias-label-primary:#e8ebf0;--dsw-alias-label-secondary:#a9b1bd;--dsw-alias-label-tertiary:#7c8593;--dsw-alias-label-primary-foreground:#0e1117;--dsw-alias-border-l1:#262b33;--dsw-alias-border-l2:#343b45;--dsw-alias-interactive-bg-hover:rgba(255,255,255,.06);--dsw-specific-input-major:#1b1f26;--dsw-alias-button-primary-fill:#7c8cff;--dsw-alias-button-primary-hover:#94a1ff;--dsw-alias-state-business-primary:#7c8cff;--dsw-alias-state-success-primary:#5fbe8a;--dsw-alias-state-error-primary:#ff8177}',
+    '.wb-root[data-wb-theme=dark]{color-scheme:dark;--dsw-alias-bg-base:#14171c;--dsw-alias-label-primary:#e8ebf0;--dsw-alias-label-secondary:#a9b1bd;--dsw-alias-label-tertiary:#7c8593;--dsw-alias-label-primary-foreground:#0e1117;--dsw-alias-border-l1:#262b33;--dsw-alias-border-l2:#343b45;--dsw-alias-interactive-bg-hover:rgba(255,255,255,.06);--dsw-specific-input-major:#1b1f26;--dsw-alias-button-primary-fill:#7c8cff;--dsw-alias-button-primary-hover:#94a1ff;--dsw-alias-state-business-primary:#7c8cff;--dsw-alias-state-success-primary:#5fbe8a;--dsw-alias-state-error-primary:#ff8177;--wb-st-pending:#7C8593;--wb-st-doing:#6FD3F2;--wb-st-done:#5FBE8A;--wb-st-returned:#FF8177;--wb-st-stuck:#FFB877;--wb-focus-bg:#1A242B}',
   ].join('\n')
 
   /**
@@ -616,6 +685,351 @@
     }
   }
 
+  /** The four board states, mapped to the design's data-state keys. */
+  var TASK_STATE = {
+    '待接': { key: 'pending', note: '她还没接。' },
+    '在做': { key: 'doing', note: '她正在做。' },
+    '已交': { key: 'done', note: '交了，等你验收。' },
+    '打回': { key: 'returned', note: '你退回去了，等她重做。' },
+  }
+
+  /** The two-character word for each data-state key (never a fifth word). */
+  var TASK_WORD = { pending: '待接', doing: '在做', done: '已交', returned: '打回' }
+
+  /** The one-line meaning, keyed by the canonical state key. */
+  var TASK_NOTE = { pending: '她还没接。', doing: '她正在做。', done: '交了，等你验收。', returned: '你退回去了，等她重做。' }
+
+  /** Sort groups: what needs moving first, then what is waiting, then settled. */
+  var TASK_RANK = { doing: 0, returned: 1, pending: 2, done: 3 }
+
+  /** Last doing key whose entrance already played; survives a refresh. */
+  var DOING_SEEN_KEY = 'whalebuddy.doingSeen'
+
+  /**
+   * The parsed board rows, from the one view the host sends.
+   * @param {*} state
+   * @returns {Array<{status: string, who: string, what: string, time: string}>}
+   */
+  function taskRowsOf(state) {
+    var view = state && state.tasksView
+    return view && Array.isArray(view.rows) ? view.rows : []
+  }
+
+  /**
+   * @param {{status?: string}} row
+   * @returns {{key: string, note: string}|null}
+   */
+  function taskStateOf(row) {
+    return row && Object.prototype.hasOwnProperty.call(TASK_STATE, row.status) ? TASK_STATE[row.status] : null
+  }
+
+  /**
+   * Match tasks.json rows to board rows by text; both are hand-written.
+   * @param {unknown} text
+   * @returns {string}
+   */
+  function taskKeyOf(text) {
+    return String(text || '').replace(/\s+/g, ' ').trim()
+  }
+
+  /**
+   * Parse the board's \`YYYY-MM-DD[ HH:MM]\` time. A missing clock is not an
+   * error: the board's old rows only have a day.
+   * @param {unknown} text
+   * @returns {{at: number | null, clock: boolean}}
+   */
+  function taskTimestamp(text) {
+    var match = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?$/.exec(String(text || '').trim())
+    if (match === null) return { at: null, clock: false }
+    var at = new Date(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+      match[4] === undefined ? 0 : Number(match[4]),
+      match[5] === undefined ? 0 : Number(match[5]),
+    ).getTime()
+    return { at: Number.isFinite(at) ? at : null, clock: match[4] !== undefined }
+  }
+
+  /**
+   * Calendar-day wording: 今天 / 昨天 / N 天前. Never half a day.
+   * @param {number} at
+   * @param {number} now
+   * @returns {string}
+   */
+  function taskDayLabel(at, now) {
+    var start = new Date(at)
+    start.setHours(0, 0, 0, 0)
+    var today = new Date(now)
+    today.setHours(0, 0, 0, 0)
+    var days = Math.round((today.getTime() - start.getTime()) / 86400000)
+    if (days <= 0) return '今天'
+    if (days === 1) return '昨天'
+    return days + ' 天前'
+  }
+
+  /**
+   * @param {number} at
+   * @returns {string}
+   */
+  function taskClock(at) {
+    var date = new Date(at)
+    return String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0')
+  }
+
+  /**
+   * The time cell. "正在做" shows when it started, not how long it has run;
+   * after two hours the wording switches once to elapsed time and a warm mark.
+   * @param {{time?: string}} row
+   * @param {string} key
+   * @param {number} now
+   * @param {boolean} narrow
+   * @returns {{text: string, tone: string, stuck: boolean}}
+   */
+  function taskTimeLabel(row, key, now, narrow) {
+    var parsed = taskTimestamp(row && row.time)
+    if (parsed.at === null) return { text: String((row && row.time) || ''), tone: '', stuck: false }
+
+    if (key === 'doing') {
+      var elapsed = Math.max(0, now - parsed.at)
+      if (parsed.clock && elapsed >= 120 * 60 * 1000) {
+        if (elapsed >= 24 * 60 * 60 * 1000) {
+          return {
+            text: taskDayLabel(parsed.at, now) + (narrow ? '' : ' ' + taskClock(parsed.at)),
+            tone: 'stuck',
+            stuck: true,
+          }
+        }
+        var minutes = Math.floor(elapsed / 60000)
+        var hours = Math.floor(minutes / 60)
+        var rest = minutes % 60
+        return {
+          text: '已 ' + hours + ' 小时' + (!narrow && rest > 0 ? ' ' + rest + ' 分' : ''),
+          tone: 'stuck',
+          stuck: true,
+        }
+      }
+      return parsed.clock
+        ? { text: '起于 ' + taskClock(parsed.at), tone: 'doing', stuck: false }
+        : { text: taskDayLabel(parsed.at, now), tone: 'doing', stuck: false }
+    }
+
+    if (key === 'returned') {
+      var age = Math.max(0, now - parsed.at)
+      var prefix
+      if (age < 60 * 1000) prefix = '刚刚'
+      else if (age < 60 * 60 * 1000) prefix = Math.floor(age / 60000) + ' 分钟前'
+      else if (age < 24 * 60 * 60 * 1000) prefix = Math.floor(age / 3600000) + ' 小时前'
+      else prefix = taskDayLabel(parsed.at, now) + (!narrow && parsed.clock ? ' ' + taskClock(parsed.at) : '')
+      return { text: prefix + ' 打回', tone: 'returned', stuck: false }
+    }
+
+    if (key === 'done') {
+      return {
+        text: taskDayLabel(parsed.at, now) + (!narrow && parsed.clock ? ' ' + taskClock(parsed.at) : ''),
+        tone: '',
+        stuck: false,
+      }
+    }
+
+    return { text: taskDayLabel(parsed.at, now), tone: '', stuck: false }
+  }
+
+  /**
+   * @param {Array<{status: string}>} rows
+   * @returns {{doing: number, pending: number, returned: number, done: number}}
+   */
+  function taskCounts(rows) {
+    var counts = { doing: 0, pending: 0, returned: 0, done: 0 }
+    for (var index = 0; index < rows.length; index += 1) {
+      var info = taskStateOf(rows[index])
+      if (info !== null && Object.prototype.hasOwnProperty.call(counts, info.key)) counts[info.key] += 1
+    }
+    return counts
+  }
+
+  /**
+   * The card-head count: only non-zero states, never "未完成".
+   * @param {{doing: number, pending: number, returned: number}} counts
+   * @returns {string}
+   */
+  function taskCountText(counts) {
+    var parts = []
+    if (counts.doing > 0) parts.push(counts.doing + ' 件在做')
+    if (counts.pending > 0) parts.push(counts.pending + ' 件待接')
+    if (counts.returned > 0) parts.push(counts.returned + ' 件打回')
+    return parts.length === 0 ? '都交完了' : parts.join(' · ')
+  }
+
+  /**
+   * 在做 → 打回 → 待接 → 已交; the first two oldest first, the last two newest
+   * first. Unknown times sort last inside their group.
+   * @param {Array<{status: string, time: string}>} rows
+   * @returns {Array<*>}
+   */
+  function taskSort(rows) {
+    return rows.slice().sort(function (left, right) {
+      var leftInfo = taskStateOf(left)
+      var rightInfo = taskStateOf(right)
+      var leftRank = leftInfo === null ? 9 : TASK_RANK[leftInfo.key]
+      var rightRank = rightInfo === null ? 9 : TASK_RANK[rightInfo.key]
+      if (leftRank !== rightRank) return leftRank - rightRank
+      var leftAt = taskTimestamp(left.time).at
+      var rightAt = taskTimestamp(right.time).at
+      if (leftAt === null && rightAt === null) return 0
+      if (leftAt === null) return 1
+      if (rightAt === null) return -1
+      return leftRank <= 1 ? leftAt - rightAt : rightAt - leftAt
+    })
+  }
+
+  /**
+   * The one 在做 row that gets the row tint and the single entrance.
+   * @param {Array<*>} rows
+   * @returns {* | null}
+   */
+  function taskFocusRow(rows) {
+    var focus = null
+    var focusAt = -1
+    for (var index = 0; index < rows.length; index += 1) {
+      var info = taskStateOf(rows[index])
+      if (info === null || info.key !== 'doing') continue
+      var at = taskTimestamp(rows[index].time).at
+      var stamp = at === null ? -1 : at
+      if (focus === null || stamp > focusAt) {
+        focus = rows[index]
+        focusAt = stamp
+      }
+    }
+    return focus
+  }
+
+  /**
+   * Identity for "the animation already played for this entry into 在做".
+   * @param {{who: string, what: string, time: string}} row
+   * @returns {string}
+   */
+  function animationKeyOf(row) {
+    return row.who + '|' + row.what + '|' + row.time
+  }
+
+  /**
+   * @param {*} state
+   * @returns {string}
+   */
+  function selectedNameOf(state) {
+    var employees = state && Array.isArray(state.employees) ? state.employees : []
+    var selected = state && state.selected ? state.selected : ''
+    for (var index = 0; index < employees.length; index += 1) {
+      if (employees[index].slug === selected) return String(employees[index].name || '')
+    }
+    return ''
+  }
+
+  /**
+   * The board rows belonging to the selected colleague, in board order.
+   * @param {*} state
+   * @returns {Array<*>}
+   */
+  function selectedTaskRows(state) {
+    var name = selectedNameOf(state)
+    if (name === '') return []
+    return taskRowsOf(state).filter(function (row) { return String(row.who || '').trim() === name })
+  }
+
+  /**
+   * @returns {string[]}
+   */
+  function seenDoingKeys() {
+    try {
+      if (typeof window === 'undefined' || window.localStorage === undefined) return []
+      var raw = window.localStorage.getItem(DOING_SEEN_KEY)
+      var list = raw === null ? [] : JSON.parse(raw)
+      return Array.isArray(list) ? list.filter(function (key) { return typeof key === 'string' }) : []
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * @param {string[]} keys
+   * @returns {void}
+   */
+  function rememberDoingKeys(keys) {
+    try {
+      if (typeof window === 'undefined' || window.localStorage === undefined) return
+      var merged = seenDoingKeys()
+      for (var index = 0; index < keys.length; index += 1) {
+        if (typeof keys[index] === 'string' && merged.indexOf(keys[index]) === -1) merged.push(keys[index])
+      }
+      window.localStorage.setItem(DOING_SEEN_KEY, JSON.stringify(merged.slice(-64)))
+    } catch {
+      // Blocked storage only means the entrance may replay after a refresh.
+    }
+  }
+
+  /**
+   * @returns {boolean}
+   */
+  function prefersReducedMotion() {
+    try {
+      return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+        ? window.matchMedia('(prefers-reduced-motion: reduce)').matches === true
+        : false
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * The symbol a person's tree branch shows: doing first, then returned, then
+   * pending, then done. Derived only from board rows; never from a process.
+   * @param {Array<*>} rows
+   * @returns {string}
+   */
+  function personStateOf(rows) {
+    var best = ''
+    var bestRank = 99
+    for (var index = 0; index < rows.length; index += 1) {
+      var info = taskStateOf(rows[index])
+      if (info === null) continue
+      var rank = TASK_RANK[info.key]
+      if (rank < bestRank) {
+        best = info.key
+        bestRank = rank
+      }
+    }
+    return best
+  }
+
+  /**
+   * Every doing row's identity for this payload.
+   * @param {*} state
+   * @returns {string[]}
+   */
+  function doingKeysOf(state) {
+    var rows = selectedTaskRows(state)
+    var keys = []
+    for (var index = 0; index < rows.length; index += 1) {
+      var info = taskStateOf(rows[index])
+      if (info !== null && info.key === 'doing') keys.push(animationKeyOf(rows[index]))
+    }
+    return keys
+  }
+
+  /**
+   * The focus row's animation key when it has not played yet; otherwise null.
+   * @param {*} state
+   * @returns {string | null}
+   */
+  function nextAnimationKey(state) {
+    if (prefersReducedMotion()) return null
+    var focus = taskFocusRow(taskSort(selectedTaskRows(state)))
+    if (focus === null) return null
+    var key = animationKeyOf(focus)
+    return seenDoingKeys().indexOf(key) === -1 ? key : null
+  }
+
   /**
    * The sidebar row glyph. The shell owns the button, label and rail geometry;
    * this draws only the glyph, like every other panel row.
@@ -756,6 +1170,21 @@
       var wsOpen = wsOpenHook[0]
       var setWsOpen = wsOpenHook[1]
 
+      // One 60 s ticker recomputes every visible row; nothing updates per second.
+      var nowHook = React.useState(function () { return Date.now() })
+      var now = nowHook[0]
+      var setNow = nowHook[1]
+
+      // The single key whose entrance plays once; null means everything is static.
+      var animHook = React.useState(null)
+      var animKey = animHook[0]
+      var setAnimKey = animHook[1]
+
+      // A hidden page pauses the entrance, like the design's reduced-motion rule.
+      var pauseHook = React.useState(false)
+      var paused = pauseHook[0]
+      var setPaused = pauseHook[1]
+
       var requestRef = React.useRef(0)
       var rootRef = React.useRef(null)
 
@@ -773,8 +1202,10 @@
           break
         }
       }
+      var selectedName = selectedNameOf(state)
       var presetId = selected === '' ? '' : 'whalebuddy:' + selected
-      var now = Date.now()
+      var taskView = state && state.tasksView ? state.tasksView : null
+      var doingKeysNow = doingKeysOf(state)
 
       /** Draft-or-disk text for every editable surface, by file key. */
       var textOfFile = {}
@@ -797,6 +1228,10 @@
       for (var taskIndex = 0; taskIndex < taskItems.length; taskIndex += 1) {
         if (taskItems[taskIndex].status === 'open') openTaskCount += 1
       }
+      var earlyTaskCounts = taskCounts(selectedTaskRows(state))
+      var taskBadge = state && state.tasksView
+        ? earlyTaskCounts.doing + earlyTaskCounts.pending + earlyTaskCounts.returned
+        : openTaskCount
 
       /**
        * @param {string} file
@@ -821,6 +1256,11 @@
        */
       function adopt(next) {
         setState(next)
+        var nextAnimKey = nextAnimationKey(next)
+        setAnimKey(nextAnimKey)
+        // Persist on adoption, not in an effect: a refresh must never replay
+        // even if the pane never reaches its post-render effect.
+        if (nextAnimKey !== null) rememberDoingKeys(doingKeysOf(next))
         setDrafts(filesFrom(next))
         setTab('profile')
         setEditing(null)
@@ -869,6 +1309,37 @@
       React.useEffect(function () {
         void load('')
       }, [])
+
+      // The only clock in the pane: one interval, once a minute, never rAF.
+      React.useEffect(function () {
+        if (typeof setInterval !== 'function') return
+        var timer = setInterval(function () { setNow(Date.now()) }, 60000)
+        return function () {
+          if (typeof clearInterval === 'function') clearInterval(timer)
+        }
+      }, [])
+
+      React.useEffect(function () {
+        if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return
+        function onVisibility() {
+          setPaused(document.visibilityState === 'hidden')
+        }
+        document.addEventListener('visibilitychange', onVisibility)
+        return function () {
+          if (typeof document.removeEventListener === 'function') document.removeEventListener('visibilitychange', onVisibility)
+        }
+      }, [])
+
+      // The entrance: 900 ms in, three breaths, static at 7.2 s. The class is
+      // removed at the same moment so getAnimations() is empty afterwards.
+      React.useEffect(function () {
+        if (animKey === null) return
+        rememberDoingKeys(doingKeysNow.concat([animKey]))
+        var timer = typeof setTimeout === 'function' ? setTimeout(function () { setAnimKey(null) }, 7200) : null
+        return function () {
+          if (timer !== null && typeof clearTimeout === 'function') clearTimeout(timer)
+        }
+      }, [animKey])
 
       // First paint only: the preview column is wide-screen furniture, the
       // drawer is the narrow-screen form. A resize keeps the user's choice.
@@ -1195,7 +1666,7 @@
 
       var tabs = h('nav', { className: 'wb-tabs', role: 'tablist' },
         TABS.map(function (spec) {
-          var count = spec.id === 'memory' ? memoryCount : spec.id === 'tasks' ? openTaskCount : -1
+          var count = spec.id === 'memory' ? memoryCount : spec.id === 'tasks' ? taskBadge : -1
           return h('button', {
             key: spec.id,
             type: 'button',
@@ -1551,7 +2022,100 @@
         })
       )
 
-      var taskRows = taskItems.map(function (task) {
+      // ---- 待办四态与班组树：同一份 tasksView，两处呈现 --------------------
+      var boardRows = selectedTaskRows(state)
+      var sortedBoardRows = taskSort(boardRows)
+      var boardCounts = taskCounts(boardRows)
+      var countLabel = taskView ? taskCountText(boardCounts) : openTaskCount + ' 件未完成'
+      var focusRow = taskFocusRow(sortedBoardRows)
+      var focusKey = focusRow === null ? '' : animationKeyOf(focusRow)
+      var jsonTaskByKey = {}
+      for (var jsonIndex = 0; jsonIndex < taskItems.length; jsonIndex += 1) {
+        var jsonTask = taskItems[jsonIndex]
+        if (jsonTask !== null && typeof jsonTask === 'object' && typeof jsonTask.text === 'string') {
+          jsonTaskByKey[taskKeyOf(jsonTask.text)] = jsonTask
+        }
+      }
+
+      /** The four marks: ring, ring+dot, check, return arrow. */
+      function taskMark(key) {
+        var children
+        if (key === 'doing') {
+          children = [
+            h('circle', { key: 'ring', cx: 7, cy: 7, r: 4.25, fill: 'none', stroke: 'currentColor', strokeWidth: 1.5 }),
+            h('circle', { key: 'dot', className: 'wb-tdot', cx: 7, cy: 7, r: 2.1, fill: 'currentColor', stroke: 'none' }),
+          ]
+        } else if (key === 'done') {
+          children = [h('path', { key: 'check', d: 'M3.2 7.3 L5.9 10 L10.8 4.2', fill: 'none', stroke: 'currentColor', strokeWidth: 2 })]
+        } else if (key === 'returned') {
+          children = [
+            h('path', { key: 'bend', d: 'M11.5 5.5 V10.5 H3.5', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }),
+            h('path', { key: 'head', d: 'M6.5 7.5 L3.5 10.5 L6.5 13.5', fill: 'none', stroke: 'currentColor', strokeWidth: 2 }),
+          ]
+        } else {
+          children = [h('circle', { key: 'ring', cx: 7, cy: 7, r: 4.25, fill: 'none', stroke: 'currentColor', strokeWidth: 1.5 })]
+        }
+        return h('span', { className: 'wb-tmark', 'data-mark': key, 'aria-hidden': 'true' },
+          h('svg', { viewBox: '0 0 14 14', width: 14, height: 14, fill: 'none', strokeLinecap: 'round', strokeLinejoin: 'round' }, children)
+        )
+      }
+
+      /**
+       * One board row. data-time is the clock (11:30) when the board has one,
+       * the raw date otherwise, so the acceptance hook can be read directly.
+       * @param {*} row
+       * @param {number} index
+       * @returns {*}
+       */
+      function taskRowNode(row, index) {
+        var info = taskStateOf(row)
+        if (info === null) return null
+        var key = info.key
+        var rowKey = animationKeyOf(row)
+        var match = jsonTaskByKey[taskKeyOf(row.what)]
+        var unaligned = match !== undefined && (match.status === 'done') !== (row.status === '已交')
+        var parsed = taskTimestamp(row.time)
+        var wide = taskTimeLabel(row, key, now, false)
+        var narrow = taskTimeLabel(row, key, now, true)
+        var stamp = parsed.at === null ? String(row.time || '') : parsed.clock ? taskClock(parsed.at) : String(row.time || '')
+        return h('div', {
+          className: 'wb-trow',
+          key: 'task-' + index,
+          'data-state': key,
+          'data-focus': focusKey === rowKey ? 'true' : undefined,
+          'data-animate': animKey !== null && animKey === rowKey ? 'true' : undefined,
+          'data-time': stamp,
+          'data-time-raw': String(row.time || ''),
+          'data-who': String(row.who || ''),
+          'data-unaligned': unaligned ? 'true' : undefined,
+          title: info.note,
+        },
+          taskMark(key),
+          h('span', { className: 'wb-tstate', 'data-state-word': key }, TASK_WORD[key]),
+          h('span', { className: 'wb-ttext', 'data-done': key === 'done' ? 'true' : undefined, title: row.what }, row.what),
+          h('span', { className: 'wb-tmeta' },
+            unaligned
+              ? h('span', { className: 'wb-tunalign', title: 'tasks.json 与工作板不一致，以板为准' }, '未对齐')
+              : (String(row.who || '').trim() === selectedName ? null : h('span', { className: 'wb-twho' }, row.who)),
+            h('span', { className: 'wb-ttime', 'data-tone': wide.tone === '' ? undefined : wide.tone },
+              wide.stuck ? h('i', { className: 'wb-tstuck', 'aria-hidden': 'true' }) : null,
+              h('span', { className: 'wb-twide' }, wide.text),
+              h('span', { className: 'wb-tnarrow' }, narrow.text)
+            )
+          )
+        )
+      }
+
+      // The legacy checkbox list survives, but only for rows the board has not
+      // taken over. The board stays the status source; these are "未进板".
+      var boardKeys = {}
+      for (var boardKeyIndex = 0; boardKeyIndex < sortedBoardRows.length; boardKeyIndex += 1) {
+        boardKeys[taskKeyOf(sortedBoardRows[boardKeyIndex].what)] = true
+      }
+      var legacyTaskRows = taskItems.filter(function (task) {
+        return task !== null && typeof task === 'object' && typeof task.text === 'string' && boardKeys[taskKeyOf(task.text)] !== true
+      })
+      var legacyNodes = legacyTaskRows.map(function (task) {
         var done = task.status !== 'open'
         return h('label', { className: 'wb-task', key: task.id },
           h('input', {
@@ -1568,14 +2132,87 @@
       var tasksPane = h('div', { className: 'wb-pane', 'data-dsh-part': 'colleague-pane-tasks' },
         h('section', { className: 'wb-card' },
           h('div', { className: 'wb-cardHead' },
-            h('h3', { className: 'wb-cardTitle' }, '待办'),
-            h('span', { className: 'wb-cardAction wb-hint' }, openTaskCount + ' 件未完成')
+            h('h3', { className: 'wb-cardTitle' }, '工单'),
+            h('span', { className: 'wb-cardAction wb-hint', 'data-wb-task-count': '' }, countLabel)
           ),
-          taskRows.length === 0
-            ? h('p', { className: 'wb-inlineEmpty' }, '还没有待办。她答应你的事、你交办的事都会落到这里。')
-            : taskRows
+          taskView === null
+            ? h('p', { className: 'wb-inlineEmpty' }, '宿主还没给出工作板解析结果。')
+            : (sortedBoardRows.length === 0
+                ? h('p', { className: 'wb-inlineEmpty' }, '板上还没有她的单。')
+                : h('div', { className: 'wb-tasks', 'data-wb-four-state': '' }, sortedBoardRows.map(taskRowNode))),
+          taskView !== null && taskView.badRows > 0
+            ? h('p', { className: 'wb-hint' }, '板上有 ' + taskView.badRows + ' 行不是四态，已跳过。')
+            : null
         ),
-        h('p', { className: 'wb-hint' }, '勾选即保存')
+        legacyNodes.length > 0
+          ? h('section', { className: 'wb-card', 'data-dsh-part': 'colleague-pane-legacy-tasks' },
+              h('div', { className: 'wb-tlegacyHead' },
+                '未进板',
+                h('span', { className: 'wb-hint' }, '以 tasks.json 为准 · 勾选即保存')
+              ),
+              legacyNodes
+            )
+          : null,
+        h('p', { className: 'wb-hint' }, '状态以工作板为准；这里是只读呈现。')
+      )
+
+      // ---- 班组树：默认打开；根是蓝鲸（班组），第二层全员，叶子是她的单 ----
+      var treePeople = []
+      var seenPeople = {}
+      for (var personIndex = 0; personIndex < employees.length; personIndex += 1) {
+        var person = employees[personIndex]
+        var personName = String(person.name || '')
+        if (personName === '' || seenPeople[personName] === true) continue
+        seenPeople[personName] = true
+        treePeople.push({ name: personName, role: String(person.role || '') })
+      }
+      for (var whoIndex = 0; whoIndex < taskRowsOf(state).length; whoIndex += 1) {
+        var whoName = String(taskRowsOf(state)[whoIndex].who || '').trim()
+        if (whoName === '' || seenPeople[whoName] === true) continue
+        seenPeople[whoName] = true
+        treePeople.push({ name: whoName, role: '' })
+      }
+      var treeNodes = treePeople.map(function (person) {
+        var personRows = taskSort(taskRowsOf(state).filter(function (row) {
+          return String(row.who || '').trim() === person.name
+        }))
+        var personCounts = taskCounts(personRows)
+        var personState = personStateOf(personRows)
+        return h('div', { className: 'wb-treePerson', key: 'person-' + person.name, 'data-who': person.name },
+          h('div', { className: 'wb-treeHead' },
+            personState === '' ? null : h('span', { className: 'wb-treeSignal', 'data-person-state': personState, title: TASK_NOTE[personState], 'aria-label': TASK_NOTE[personState] }, taskMark(personState)),
+            h('span', { className: 'wb-treeName' }, person.name),
+            person.role === '' ? null : h('span', { className: 'wb-treeRole' }, person.role),
+            h('span', { className: 'wb-treeStats' }, personRows.length === 0 ? '没有单' : taskCountText(personCounts))
+          ),
+          personRows.length === 0
+            ? null
+            : h('div', { className: 'wb-treeLeaves' }, personRows.map(function (row, index) {
+                var info = taskStateOf(row)
+                if (info === null) return null
+                return h('div', { className: 'wb-treeLeaf', key: person.name + '-' + index, 'data-state': info.key },
+                  taskMark(info.key),
+                  h('span', { className: 'wb-tstate' }, TASK_WORD[info.key]),
+                  h('span', { className: 'wb-treeLeafText', title: row.what }, row.what)
+                )
+              }))
+        )
+      })
+      var teamCounts = taskCounts(taskRowsOf(state))
+      var teamSummary = taskCountText(teamCounts)
+      if (taskView !== null && taskView.badRows > 0) teamSummary += ' · ' + taskView.badRows + ' 行未识别'
+      var teamSection = h('details', { className: 'wb-team', open: true, 'data-dsh-part': 'colleague-team-tree' },
+        h('summary', { className: 'wb-teamHead' },
+          h('span', null, '蓝鲸 · 班组'),
+          h('span', { className: 'wb-hint' }, teamSummary)
+        ),
+        h('div', { className: 'wb-tree', 'data-wb-tree': '' }, treeNodes),
+        state && typeof state.board === 'string' && state.board.trim() !== ''
+          ? h('details', { className: 'wb-board' },
+              h('summary', { className: 'wb-boardHead' }, '原始工作板'),
+              h('pre', { className: 'wb-boardText' }, state.board)
+            )
+          : null
       )
 
       var rosterPane = h('div', { className: 'wb-pane', 'data-dsh-part': 'colleague-pane-roster' },
@@ -1659,6 +2296,7 @@
         ? h('div', { className: 'wb-main' }, emptyHero)
         : h('div', { className: 'wb-main' },
             profileHead(),
+            teamSection,
             tabs,
             activePane
           )
@@ -1821,6 +2459,7 @@
         'data-dsh-plugin': 'whalebuddy',
         'data-preview': previewOpen ? 'open' : 'closed',
         'data-wb-theme': theme,
+        'data-wb-paused': paused ? 'true' : undefined,
         ref: rootRef,
       },
         header,
@@ -1920,7 +2559,7 @@
 
   if (typeof window !== 'undefined' && window.__ModuleLoader__ && typeof window.__ModuleLoader__.load === 'function') {
     window.__ModuleLoader__.load({
-      id: 'dsh-whalebuddy',
+      id: '@fanyingnie/dsh-whalebuddy',
       factory(require) {
         return createPanelPlugin(require('react'))
       },

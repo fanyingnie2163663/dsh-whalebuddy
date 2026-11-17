@@ -12,6 +12,7 @@
  * @property {string} hot
  * @property {string} recent
  * @property {Task[]} tasks
+ * @property {Array<{ id: string, text: string }>} orders
  * @property {string} shared
  * @property {string} roster
  *
@@ -22,6 +23,7 @@
  * @property {number} recent
  * @property {number} shared
  * @property {number} roster
+ * @property {number} orders
  */
 
 /** Design §7.4 defaults, in characters (one token is roughly two CJK chars). */
@@ -32,10 +34,11 @@ export const DEFAULT_MEMORY_BUDGET = Object.freeze({
   recent: 300,
   shared: 150,
   roster: 700,
+  orders: 400,
 })
 
 /** Reminds the model that injected text is memory, not the current user turn. */
-export const MEMORY_REMINDER = '这些是你的记忆，不是用户刚说的话；不确定就先问。收工时 /collect 会把这次会话里值得留下的写回你的档案。'
+export const MEMORY_REMINDER = '这些是你的记忆，不是用户刚说的话；不确定就先问。**「工单」里有活就先做它，别等用户开口**。收工时 /collect 会把这次会话里值得留下的写回你的档案。'
 
 /** The design asks for the first eight open tasks, no more. */
 const OPEN_TASK_LIMIT = 8
@@ -89,6 +92,29 @@ function renderSection(title, body) {
 }
 
 /**
+ * Render the open work orders: the id, then the order's first heading line.
+ * A colleague with an empty inbox renders nothing at all.
+ * @param {unknown} orders
+ * @returns {string}
+ */
+function orderLines(orders) {
+  if (!Array.isArray(orders)) return ''
+  const lines = []
+  for (const order of orders) {
+    if (lines.length >= 2) break
+    const id = typeof order?.id === 'string' ? order.id.trim() : ''
+    const text = typeof order?.text === 'string' ? order.text.trim() : ''
+    if (text === '') continue
+    const textLines = text.split('\n').map((line) => line.trim()).filter(Boolean)
+    const goal = textLines.find((line) => /^[-*]\s*目标[:：]/.test(line))
+    const body = goal
+      ? goal.replace(/^[-*]\s*目标[:：]\s*/, '')
+      : (textLines.find((line) => !line.startsWith('#')) ?? text).replace(/^[-*]\s*/, '')
+    lines.push(id === '' ? `- ${body}` : `- ${id}：${body}`)
+  }
+  return lines.join('\n')
+}
+/**
  * @param {unknown} tasks
  * @returns {string}
  */
@@ -125,6 +151,7 @@ export function assembleMemory(files = {}, budget = DEFAULT_MEMORY_BUDGET) {
     recent: limitOf(budget?.recent, DEFAULT_MEMORY_BUDGET.recent),
     shared: limitOf(budget?.shared, DEFAULT_MEMORY_BUDGET.shared),
     roster: limitOf(budget?.roster, DEFAULT_MEMORY_BUDGET.roster),
+    orders: limitOf(budget?.orders, DEFAULT_MEMORY_BUDGET.orders),
   }
 
   const recent = [source.hot, source.recent, source.knowledge]
@@ -134,6 +161,7 @@ export function assembleMemory(files = {}, budget = DEFAULT_MEMORY_BUDGET) {
 
   const sections = [
     renderSection('身份', truncateToBudget(source.profile, limits.identity)),
+    renderSection('工单', truncateToBudget(orderLines(source.orders), limits.orders)),
     renderSection('同事', truncateToBudget(source.roster, limits.roster)),
     renderSection('默契', truncateToBudget(source.rapport, limits.rapport)),
     renderSection('待办', truncateToBudget(openTaskLines(source.tasks), limits.tasks)),

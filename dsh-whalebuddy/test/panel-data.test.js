@@ -86,6 +86,26 @@ test('panel state selects the first colleague when none is named', async () => {
   assert.equal(state.employees.length, 1)
 })
 
+test('panel state carries the raw board and the same rows parsed once', async () => {
+  const { store } = await seed()
+  const board = [
+    '| 状态 | 谁 | 什么 | 时间 |',
+    '|---|---|---|---|',
+    '| 在做 | 逆戟 | 把样片剪到 60 秒 | 2026-11-18 11:30 |',
+    '| 已定 | 蓝鲸 | 不进图的决策 | 2026-11-18 |',
+    '',
+    '## 已定',
+  ].join('\n')
+  await store.write('_shared', 'board.md', board)
+
+  const state = await readPanelState(store)
+  assert.equal(state.board, board)
+  assert.deepEqual(state.tasksView.rows, [
+    { status: '在做', who: '逆戟', what: '把样片剪到 60 秒', time: '2026-11-18 11:30' },
+  ])
+  assert.equal(state.tasksView.badRows, 1)
+})
+
 test('whitelist is exact, not a prefix match', () => {
   assert.equal(isWritable('profile.md'), true)
   assert.equal(isWritable('memory/hot.md.bak'), false)

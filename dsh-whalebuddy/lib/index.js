@@ -10,6 +10,8 @@ import { assembleMemory } from './inject.js'
 import { DEFAULT_NAMES } from './names.js'
 import { NOTICE_FILE, appendWithinCap, collectNotice, noticeCapFromState, parseNotices } from './notices.js'
 import { registerEmployeePresets, resolveTemplateRows } from './presets.js'
+import { defineTool } from '@deepseek-ai/dsh-tools'
+import { assignWorkspace, canAssign } from './assign.js'
 import { createStore } from './store.js'
 
 /**
@@ -264,7 +266,7 @@ async function readMemoryText(store, slug, rel) {
  * @returns {Promise<MemoryFiles>}
  */
 async function readMemoryFiles(store, employee) {
-  const [profile, rapport, knowledge, hot, recent, tasks, shared, roster] = await Promise.all([
+  const [profile, rapport, knowledge, hot, recent, tasks, shared, roster, orders] = await Promise.all([
     readMemoryText(store, employee, 'profile.md'),
     readMemoryText(store, employee, 'memory/rapport.md'),
     readMemoryText(store, employee, 'memory/knowledge.md'),
@@ -273,8 +275,9 @@ async function readMemoryFiles(store, employee) {
     store.tasks(employee),
     readMemoryText(store, SHARED_SLUG, SHARED_USER_FILE),
     readMemoryText(store, SHARED_SLUG, SHARED_ROSTER_FILE),
+    store.orders(employee),
   ])
-  return { profile, rapport, knowledge, hot, recent, tasks, shared, roster }
+  return { profile, rapport, knowledge, hot, recent, tasks, shared, roster, orders }
 }
 
 /**
@@ -593,6 +596,33 @@ async function applyScoped(ctx, config, employee) {
     warn(ctx, `注册记忆段失败：${describeError(error)}`)
   }
 
+
+  const actorProfile = (await store.read(employee, 'profile.md')) ?? ''
+  if (typeof ctx.inject === 'function' && canAssign(actorProfile)) {
+    ctx.inject(['tools'], (scope) => {
+      try {
+        scope.tools.register(defineTool({
+          name: 'colleague_assign',
+          description: '把某个工作区目录绑给一位同事，写进她的档案。只有档案里有「权限：分配工作区」的同事能用；别的同事调用会被告知没有权限。参数：colleague 是同事的名字或 slug，workspace 是绝对路径。',
+          parameters: {
+            colleague: { type: 'string', required: true, description: '同事的名字或 slug' },
+            workspace: { type: 'string', required: true, description: '工作区的绝对路径' },
+          },
+          output: {
+            schema: { type: 'object', additionalProperties: true, properties: { text: { type: 'string', required: true } } },
+            render: (_args, value) => [{ type: 'text', text: value.text }],
+          },
+          isConcurrencySafe: () => true,
+          async execute(args) {
+            const result = await assignWorkspace(store, employee, args?.colleague, args?.workspace)
+            return { text: result.text }
+          },
+        }))
+      } catch (error) {
+        warn(ctx, `注册 colleague_assign 失败：${describeError(error)}`)
+      }
+    })
+  }
   if (typeof ctx?.logger?.info === 'function') {
     ctx.logger.info('whalebuddy memory loaded (employee=%s, dataDir=%s)', employee, root)
   }

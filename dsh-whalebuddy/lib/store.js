@@ -41,6 +41,7 @@ import { isNoticeCap } from './notices.js'
  * @property {(slug: string, rel: string, text: string) => Promise<void>} write
  * @property {(slug: string) => Promise<Task[]>} tasks
  * @property {(slug: string, tasks: Task[]) => Promise<void>} saveTasks
+ * @property {(slug: string, options?: {limit?: number}) => Promise<Array<{ id: string, text: string }>>} orders
  * @property {() => Promise<{ employees: EmployeeSummary[], changed: boolean }>} repair
  */
 
@@ -463,5 +464,30 @@ export function createStore(root) {
     await write(slug, 'memory/tasks.json', `${JSON.stringify(tasks, null, 2)}\n`)
   }
 
-  return { list, create, setAutonomy, setNoticeCap, read, write, tasks, saveTasks, repair }
+  /**
+   * Read a colleague's work orders: `inbox/*.md`, name order first, capped.
+   * A missing inbox directory means "no orders" — a colleague without one is normal.
+   * @param {string} slug
+   * @param {{limit?: number}} [options]
+   * @returns {Promise<Array<{ id: string, text: string }>>}
+   */
+  async function orders(slug, { limit = 3 } = {}) {
+    const dir = join(rootDir, slug, 'inbox')
+    let names
+    try {
+      names = await readdir(dir)
+    } catch (error) {
+      if (error?.code === 'ENOENT') return []
+      throw error
+    }
+    const picked = names.filter((name) => name.endsWith('.md')).sort().slice(0, Math.max(0, limit))
+    const items = []
+    for (const name of picked) {
+      const text = await readTextIfExists(join(dir, name))
+      if (typeof text === 'string' && text.trim() !== '') items.push({ id: name.replace(/\.md$/, ''), text: text.trim() })
+    }
+    return items
+  }
+
+  return { list, create, setAutonomy, setNoticeCap, read, write, tasks, saveTasks, orders, repair }
 }
